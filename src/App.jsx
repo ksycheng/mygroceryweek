@@ -492,3 +492,4 @@ export default function App() {
                     <span>{meta.icon}</span>
                     <span style={{ fontSize:12, fontWeight:700, color:meta.accent, textTransform:"uppercase", letterSpacing:"0.5px" }}>{cat}</span>
                     <span style={{ marginLeft:"auto", fontSize:1
+}
