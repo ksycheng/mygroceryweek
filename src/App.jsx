@@ -88,7 +88,7 @@ function Sparkline({ weeks }) {
   );
 }
 
-async function callGemini(system, prompt) {
+async function callAI(system, prompt) {
   const res = await fetch("/api/prices", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -136,44 +136,26 @@ export default function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-        loadProfile(session.user.id);
-      } else {
-        setTimeout(() => setScreen("login"), 1200);
-      }
+      if (session) { setUser(session.user); loadProfile(session.user.id); }
+      else { setTimeout(() => setScreen("login"), 1200); }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        setUser(session.user);
-        loadProfile(session.user.id);
-      } else {
-        setUser(null);
-        setProfile(null);
-        setScreen("login");
-      }
+      if (session) { setUser(session.user); loadProfile(session.user.id); }
+      else { setUser(null); setProfile(null); setScreen("login"); }
     });
     return () => subscription.unsubscribe();
   }, []);
 
   const loadProfile = async (userId) => {
     const { data: prof } = await supabase.from("profiles").select("*").eq("id", userId).single();
-    if (prof) {
-      setProfile(prof);
-      setScreen("main");
-      loadGroceryList(userId);
-      loadHistory(userId);
-    } else {
-      setScreen("onboard");
-    }
+    if (prof) { setProfile(prof); setScreen("main"); loadGroceryList(userId); loadHistory(userId); }
+    else { setScreen("onboard"); }
   };
 
   const loadGroceryList = async (userId) => {
     const { data } = await supabase.from("grocery_lists").select("*").eq("user_id", userId).single();
-    if (data) {
-      setListId(data.id);
-      setItems(data.items || []);
-    } else {
+    if (data) { setListId(data.id); setItems(data.items || []); }
+    else {
       const { data: newList } = await supabase.from("grocery_lists").insert({ user_id: userId, items: [] }).select().single();
       if (newList) setListId(newList.id);
     }
@@ -203,10 +185,7 @@ export default function App() {
     setAuthErr("");
     const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPass });
     if (error) { setAuthErr(error.message); return; }
-    if (data.user) {
-      setUser(data.user);
-      setScreen("onboard");
-    }
+    if (data.user) { setUser(data.user); setScreen("onboard"); }
   };
 
   const handleLogout = async () => {
@@ -231,7 +210,7 @@ export default function App() {
     try {
       const system = "You are a meal planning assistant. Return ONLY a JSON array of grocery item strings, no markdown, no explanation.";
       const prompt = "Suggest a weekly grocery list for " + profile.people + " people who enjoy " + (profile.cuisines||[]).join(", ") + " cuisine. Budget $" + profile.budget + " CAD. Return 15-25 items as a JSON array of strings.";
-      const text = await callGemini(system, prompt);
+      const text = await callAI(system, prompt);
       const clean = text.replace(/```json|```/g, "").trim();
       const match = clean.match(/\[[\s\S]*\]/);
       if (match) setSuggestions(JSON.parse(match[0]));
@@ -245,7 +224,7 @@ export default function App() {
     try {
       const system = "You are a creative chef. Return ONLY valid JSON, no markdown, no code blocks.";
       const prompt = "Suggest 5 dishes for " + profile.people + " people who enjoy " + (profile.cuisines||[]).join(", ") + " cuisine for " + (profile.meals||[]).join(" and ") + ". Return ONLY this JSON array: [{\"name\":\"Dish Name\",\"emoji\":\"🍝\",\"cuisine\":\"Italian\",\"cookTime\":\"30 mins\",\"difficulty\":\"Easy\",\"servings\":" + profile.people + ",\"description\":\"One sentence\",\"ingredients\":[{\"name\":\"ingredient\",\"amount\":\"2\",\"unit\":\"cups\"}],\"steps\":[\"Step 1\",\"Step 2\"]}]";
-      const text = await callGemini(system, prompt);
+      const text = await callAI(system, prompt);
       const clean = text.replace(/```json|```/g, "").trim();
       const match = clean.match(/\[[\s\S]*\]/);
       if (!match) throw new Error("parse fail");
@@ -260,8 +239,7 @@ export default function App() {
     const newItems = missing.map(ing => ({ id: Date.now() + Math.random(), name: ing.amount + " " + ing.unit + " " + ing.name, category: categorize(ing.name) }));
     const updated = [...items];
     newItems.forEach(ni => { if (!updated.find(i => i.name.toLowerCase() === ni.name.toLowerCase())) updated.push(ni); });
-    setItems(updated);
-    saveList(updated);
+    setItems(updated); saveList(updated);
     setSelectedDish(null); setHaveIngredients({}); setTab("list");
     alert(missing.length + " ingredient" + (missing.length !== 1 ? "s" : "") + " added to your grocery list!");
   };
@@ -272,7 +250,7 @@ export default function App() {
     setItems(updated); saveList(updated);
   };
 
-  // FIX 1: Removed setResults(null) so prices don't reset when adding items
+  // FIX 1: No setResults(null) — prices persist when adding items
   const addItem = () => {
     const t = itemInput.trim(); if (!t) return;
     const updated = [...items, { id: Date.now(), name: t, category: categorize(t) }];
@@ -281,7 +259,7 @@ export default function App() {
     if (itemInputRef.current) itemInputRef.current.focus();
   };
 
-  // FIX 1: Removed setResults(null) so prices don't reset when removing items
+  // FIX 1: No setResults(null) — prices persist when removing items
   const removeItem = (id) => {
     const updated = items.filter(i => i.id !== id);
     setItems(updated); saveList(updated);
@@ -298,9 +276,9 @@ export default function App() {
     const postalPrefix = profile.postal.slice(0, 3);
     try {
       const system = "You are a Canadian grocery price comparison expert. Return ONLY valid JSON with no markdown, no code blocks.";
-      // FIX 2: Much more explicit location instruction
-      const prompt = "Find best grocery prices for stores specifically located in or nearest to Canadian postal code " + profile.postal + " (postal prefix " + postalPrefix + ", Ontario). You MUST only suggest real supermarkets that are actually located close to this specific postal code area. Do not suggest stores in other cities. Items: " + itemNames + ". Budget: $" + budget + " CAD.\n\nReturn ONLY this JSON:\n{\"combinations\":[{\"rank\":1,\"label\":\"Store name\",\"stores\":[\"Store\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":1,\"breakdown\":[{\"store\":\"Store\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":2,\"label\":\"Two stores\",\"stores\":[\"Store A\",\"Store B\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":2,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":3,\"label\":\"Three stores\",\"stores\":[\"Store A\",\"Store B\",\"Store C\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":3,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"}],\"budgetCAD\":" + budget + ",\"withinBudget\":true,\"overBy\":0.00,\"perItemPrices\":[{\"name\":\"item\",\"store\":\"store\",\"price\":0.00}]}\n\nAll prices in CAD. Stores must be near postal code " + profile.postal + ".";
-      const text = await callGemini(system, prompt);
+      // FIX 2: Explicit location instruction
+      const prompt = "Find best grocery prices for stores specifically located in or nearest to Canadian postal code " + profile.postal + " (postal prefix " + postalPrefix + ", Ontario). You MUST only suggest real supermarkets actually located close to this specific postal code. Do not suggest stores in other cities. Items: " + itemNames + ". Budget: $" + budget + " CAD.\n\nReturn ONLY this JSON:\n{\"combinations\":[{\"rank\":1,\"label\":\"Store name\",\"stores\":[\"Store\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":1,\"breakdown\":[{\"store\":\"Store\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":2,\"label\":\"Two stores\",\"stores\":[\"Store A\",\"Store B\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":2,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":3,\"label\":\"Three stores\",\"stores\":[\"Store A\",\"Store B\",\"Store C\"],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":3,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"}],\"budgetCAD\":" + budget + ",\"withinBudget\":true,\"overBy\":0.00,\"perItemPrices\":[{\"name\":\"item\",\"store\":\"store\",\"price\":0.00}]}\n\nAll prices in CAD. Stores must be near postal code " + profile.postal + ".";
+      const text = await callAI(system, prompt);
       const clean = text.replace(/```json|```/g, "").trim();
       const match = clean.match(/\{[\s\S]*\}/);
       if (!match) throw new Error("parse fail");
@@ -491,8 +469,231 @@ export default function App() {
                   <div style={{ background:meta.bg, padding:"9px 16px", display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid "+meta.accent+"22" }}>
                     <span>{meta.icon}</span>
                     <span style={{ fontSize:12, fontWeight:700, color:meta.accent, textTransform:"uppercase", letterSpacing:"0.5px" }}>{cat}</span>
-                    <span style={{ marginLeft:"auto", fontSize:1
-)}
+                    <span style={{ marginLeft:"auto", fontSize:12, color:meta.accent, fontWeight:600 }}>{catItems.length}</span>
+                  </div>
+                  {catItems.map(item=>(
+                    <div key={item.id} style={{ display:"flex", alignItems:"center", padding:"11px 16px", borderBottom:"1px solid #f5f0e8", gap:12 }}>
+                      <input type="checkbox" checked={!!checked[item.id]} onChange={()=>toggleCheck(item.id)} style={{ width:17, height:17, accentColor:meta.accent, cursor:"pointer", flexShrink:0 }}/>
+                      <span style={{ flex:1, fontSize:15, textDecoration:checked[item.id]?"line-through":"none", color:checked[item.id]?"#bbb":"#1a1a1a" }}>{item.name}</span>
+                      <button onClick={()=>removeItem(item.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:15, color:"#ccc", padding:"2px 6px" }}>x</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+
+            {items.length===0&&(
+              <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>🛍️</div>
+                <p style={{ fontStyle:"italic", fontSize:15 }}>Your list is empty. Use suggestions or add items above.</p>
+                <button onClick={()=>setTab("meals")} className="btn-ghost" style={{ marginTop:16 }}>Browse Meal Ideas 🍽️</button>
+              </div>
+            )}
+
+            {items.length>0&&(
+              <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:8 }}>
+                <button onClick={findPrices} disabled={loading} className="btn-primary" style={{ width:"100%", padding:16, fontSize:16 }}>
+                  {loading?"🔍 Searching Canadian stores...":"🔍 Find Best Prices and Compare Stores"}
+                </button>
+                <button onClick={()=>{const updated=[];setItems(updated);saveList(updated);setResults(null);setChecked({});setSuggestions([]);setWeekSpend(null);}} style={{ background:"none", border:"1.5px solid #f5c0c0", borderRadius:10, padding:12, fontSize:13, color:"#c0392b", cursor:"pointer" }}>🗑 Clear List</button>
+              </div>
+            )}
+            {error&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:10, padding:"12px 16px", marginTop:12, color:"#c0392b", fontSize:14 }}>⚠️ {error}</div>}
+          </div>
+        )}
+
+        {tab==="meals"&&(
+          <div>
+            {selectedDish?(
+              <div className="fade-in">
+                <button onClick={()=>{setSelectedDish(null);setHaveIngredients({});}} style={{ background:"none", border:"none", cursor:"pointer", color:"#2d5a1b", fontSize:14, fontWeight:600, marginBottom:16, display:"flex", alignItems:"center", gap:6 }}>← Back to dishes</button>
+                <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+                  <div style={{ fontSize:64, display:"flex", alignItems:"center", justifyContent:"center", padding:24, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)" }}>{selectedDish.emoji}</div>
+                  <div style={{ padding:20 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                      <h2 style={{ fontFamily:"'DM Serif Display',serif", fontSize:22, color:"#2d5a1b" }}>{selectedDish.name}</h2>
+                      <span style={{ fontSize:12, fontWeight:600, color:DIFFICULTY_COLOR[selectedDish.difficulty]||"#666", background:"#f7f4ef", padding:"3px 10px", borderRadius:99, flexShrink:0, marginLeft:8 }}>{selectedDish.difficulty}</span>
+                    </div>
+                    <p style={{ fontSize:14, color:"#7a7060", marginBottom:12 }}>{selectedDish.description}</p>
+                    <div style={{ display:"flex", gap:16, fontSize:13, color:"#7a7060" }}>
+                      <span>⏱ {selectedDish.cookTime}</span>
+                      <span>👥 {selectedDish.servings} servings</span>
+                      <span>🍴 {selectedDish.cuisine}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+                  <div style={{ padding:"14px 16px", background:"#f7f4ef", borderBottom:"1px solid #e2dbd0" }}>
+                    <p className="section-label" style={{ margin:0 }}>🥕 Ingredients — check what you already have</p>
+                  </div>
+                  {selectedDish.ingredients&&selectedDish.ingredients.map((ing,idx)=>(
+                    <div key={idx} style={{ display:"flex", alignItems:"center", padding:"12px 16px", borderBottom:"1px solid #f5f0e8", gap:12 }}>
+                      <input type="checkbox" checked={!!haveIngredients[idx]} onChange={()=>setHaveIngredients(p=>({...p,[idx]:!p[idx]}))} style={{ width:18, height:18, accentColor:"#3d8c23", cursor:"pointer", flexShrink:0 }}/>
+                      <span style={{ flex:1, fontSize:15, textDecoration:haveIngredients[idx]?"line-through":"none", color:haveIngredients[idx]?"#bbb":"#1a1a1a" }}><strong>{ing.amount} {ing.unit}</strong> {ing.name}</span>
+                      {haveIngredients[idx]&&<span style={{ fontSize:12, color:"#3d8c23", fontWeight:600 }}>Have it ✓</span>}
+                    </div>
+                  ))}
+                  <div style={{ padding:16, background:"#f7f4ef", borderTop:"1px solid #e2dbd0" }}>
+                    <p style={{ fontSize:13, color:"#7a7060", marginBottom:10 }}>{Object.values(haveIngredients).filter(Boolean).length} of {selectedDish.ingredients?.length} ingredients already at home</p>
+                    <button onClick={addMissingToList} className="btn-primary" style={{ width:"100%" }}>
+                      Add {selectedDish.ingredients?.filter((_,idx)=>!haveIngredients[idx]).length} missing items to Grocery List
+                    </button>
+                  </div>
+                </div>
+                <div className="card" style={{ overflow:"hidden" }}>
+                  <div style={{ padding:"14px 16px", background:"#f7f4ef", borderBottom:"1px solid #e2dbd0" }}>
+                    <p className="section-label" style={{ margin:0 }}>👨‍🍳 How to cook it</p>
+                  </div>
+                  {selectedDish.steps&&selectedDish.steps.map((step,idx)=>(
+                    <div key={idx} style={{ display:"flex", gap:14, padding:"14px 16px", borderBottom:"1px solid #f5f0e8", alignItems:"flex-start" }}>
+                      <span className="step-num">{idx+1}</span>
+                      <p style={{ fontSize:14, color:"#1a1a1a", lineHeight:1.6, margin:0 }}>{step}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ):(
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                  <div>
+                    <h2 style={{ fontFamily:"'DM Serif Display',serif", fontSize:22, color:"#2d5a1b", margin:0 }}>Meal Ideas</h2>
+                    <p style={{ fontSize:13, color:"#7a7060", marginTop:2 }}>Based on your cuisine preferences</p>
+                  </div>
+                  <button onClick={loadDishes} disabled={dishesLoading} style={{ background:"#e8f5e0", border:"none", borderRadius:8, padding:"8px 14px", fontSize:12, fontWeight:600, color:"#2d5a1b", cursor:"pointer" }}>
+                    {dishesLoading?"Loading...":dishes.length?"Refresh":"Suggest Dishes"}
+                  </button>
+                </div>
+                {dishError&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:10, padding:"12px 16px", marginBottom:16, color:"#c0392b", fontSize:14 }}>⚠️ {dishError}</div>}
+                {dishesLoading&&<div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}><div style={{ fontSize:40, marginBottom:12 }}>🍳</div><p style={{ fontStyle:"italic" }}>Finding dishes based on your preferences...</p></div>}
+                {!dishesLoading&&dishes.length===0&&(
+                  <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                    <div style={{ fontSize:48, marginBottom:12 }}>🍽️</div>
+                    <p style={{ fontStyle:"italic", fontSize:15, marginBottom:16 }}>Get personalized dish recommendations based on your cuisine preferences.</p>
+                    <button onClick={loadDishes} className="btn-primary">Suggest Dishes for Me</button>
+                  </div>
+                )}
+                {dishes.length>0&&(
+                  <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                    {dishes.map((dish,i)=>(
+                      <div key={i} className="dish-card" onClick={()=>{setSelectedDish(dish);setHaveIngredients({});}}>
+                        <div style={{ display:"flex", alignItems:"center" }}>
+                          <div style={{ width:80, height:80, display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)", flexShrink:0 }}>{dish.emoji}</div>
+                          <div style={{ padding:"12px 16px", flex:1 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                              <h3 style={{ fontSize:16, fontWeight:600, color:"#1a1a1a", margin:0 }}>{dish.name}</h3>
+                              <span style={{ fontSize:11, fontWeight:600, color:DIFFICULTY_COLOR[dish.difficulty]||"#666", flexShrink:0, marginLeft:8 }}>{dish.difficulty}</span>
+                            </div>
+                            <p style={{ fontSize:13, color:"#7a7060", margin:"4px 0 8px", lineHeight:1.4 }}>{dish.description}</p>
+                            <div style={{ display:"flex", gap:12, fontSize:12, color:"#aaa" }}>
+                              <span>⏱ {dish.cookTime}</span>
+                              <span>👥 {dish.servings} servings</span>
+                              <span style={{ background:"#f0f8ea", color:"#3d8c23", padding:"2px 8px", borderRadius:99, fontWeight:500 }}>{dish.cuisine}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={loadDishes} disabled={dishesLoading} className="btn-ghost" style={{ width:"100%", marginTop:4 }}>🔄 Get 5 More Dish Ideas</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab==="compare"&&(
+          <div>
+            {!results&&<div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}><div style={{ fontSize:48, marginBottom:12 }}>📊</div><p style={{ fontStyle:"italic", fontSize:15 }}>Build your list and tap Find Best Prices.</p><button onClick={()=>setTab("list")} className="btn-ghost" style={{ marginTop:16 }}>Go to List</button></div>}
+            {results&&(
+              <div>
+                {overBudget&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:12, padding:16, marginBottom:16, display:"flex", alignItems:"center", gap:10 }}><span style={{ fontSize:24 }}>⚠️</span><div><p style={{ fontWeight:700, color:"#c0392b", margin:"0 0 2px" }}>Over budget by ${(weekSpend-budget).toFixed(2)} CAD</p><p style={{ fontSize:13, color:"#c0392b", margin:0 }}>Consider removing items or using multi-store option.</p></div></div>}
+                <p className="section-label">Top 3 Shopping Strategies</p>
+                {results.combinations&&results.combinations.map((combo,i)=>(
+                  <div key={i} className="card" style={{ marginBottom:14, overflow:"hidden", border:i===0?"2px solid #3d8c23":"1px solid #e2dbd0" }}>
+                    <div style={{ padding:"14px 16px", background:i===0?"#e8f5e0":i===1?"#fef9f0":"#f7f4ef", display:"flex", justifyContent:"space-between", alignItems:"flex-start", borderBottom:"1px solid #f0ebe0" }}>
+                      <div>
+                        <div style={{ fontSize:15, fontWeight:700, color:i===0?"#2d5a1b":"#1a1a1a" }}>{i===0?"🥇 ":i===1?"🥈 ":"🥉 "}{combo.label}</div>
+                        <div style={{ fontSize:12, color:"#7a7060", marginTop:3 }}>{combo.trips} trip{combo.trips!==1?"s":""} - {combo.stores?.join(", ")}</div>
+                        {combo.tip&&<div style={{ fontSize:12, color:"#7a7060", fontStyle:"italic", marginTop:3 }}>💡 {combo.tip}</div>}
+                      </div>
+                      <div style={{ textAlign:"right", flexShrink:0, marginLeft:12 }}>
+                        <div style={{ fontSize:22, fontWeight:700, color:i===0?"#2d5a1b":"#1a1a1a" }}>${combo.totalCAD?.toFixed(2)} <span style={{ fontSize:11, fontWeight:400, color:"#aaa" }}>CAD</span></div>
+                        {combo.savingsVsWorst>0&&<div style={{ fontSize:12, color:"#3d8c23", fontWeight:600 }}>Save ${combo.savingsVsWorst.toFixed(2)}</div>}
+                      </div>
+                    </div>
+                    {combo.breakdown&&combo.breakdown.map((b,j)=>(
+                      <div key={j} style={{ padding:"10px 16px", borderBottom:"1px solid #f5f0e8" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, fontWeight:600, marginBottom:4 }}><span>{b.store}</span><span style={{ color:"#3d8c23" }}>${b.subtotal?.toFixed(2)}</span></div>
+                        <div style={{ fontSize:12, color:"#7a7060" }}>{b.items?.join(", ")}</div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {results.perItemPrices?.length>0&&(
+                  <div className="card" style={{ overflow:"hidden" }}>
+                    <div style={{ padding:"12px 16px", borderBottom:"1px solid #f0ebe0", background:"#f7f4ef" }}><p className="section-label" style={{ margin:0 }}>Price per Item</p></div>
+                    {results.perItemPrices.map((p,i)=>(
+                      <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"10px 16px", borderBottom:"1px solid #f5f0e8", fontSize:14 }}>
+                        <span style={{ color:"#444" }}>{p.name}</span>
+                        <span style={{ color:"#3d8c23", fontWeight:600 }}>${p.price?.toFixed(2)} <span style={{ color:"#aaa", fontWeight:400, fontSize:12 }}>@ {p.store}</span></span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab==="history"&&(
+          <div>
+            {history.length===0?(
+              <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>📈</div>
+                <p style={{ fontStyle:"italic", fontSize:15 }}>No history yet. After comparing prices, tap Save Week.</p>
+              </div>
+            ):(
+              <div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+                  <div className="card" style={{ padding:16, textAlign:"center" }}><p style={{ fontSize:12, color:"#7a7060", margin:"0 0 4px" }}>Avg Weekly Spend</p><p style={{ fontSize:24, fontFamily:"'DM Serif Display',serif", color:"#2d5a1b", margin:0 }}>${avgSpend}</p><p style={{ fontSize:11, color:"#aaa", margin:"2px 0 0" }}>CAD</p></div>
+                  <div className="card" style={{ padding:16, textAlign:"center" }}><p style={{ fontSize:12, color:"#7a7060", margin:"0 0 4px" }}>Weeks Tracked</p><p style={{ fontSize:24, fontFamily:"'DM Serif Display',serif", color:"#2d5a1b", margin:0 }}>{history.length}</p><p style={{ fontSize:11, color:"#aaa", margin:"2px 0 0" }}>of 12 max</p></div>
+                </div>
+                {history.length>=2&&(
+                  <div className="card" style={{ padding:16, marginBottom:16 }}>
+                    <p className="section-label">Spending Trend</p>
+                    <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"space-between", gap:16 }}>
+                      <Sparkline weeks={[...history].reverse()}/>
+                      <div style={{ fontSize:12, color:"#7a7060", textAlign:"right" }}>
+                        <div>Budget: <strong style={{ color:"#2d5a1b" }}>${budget}/wk</strong></div>
+                        <div style={{ marginTop:4 }}>Last week: <strong>${history[0]?.spent?.toFixed(2)}</strong></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <p className="section-label">Weekly Log</p>
+                {history.map((w,i)=>{
+                  const over=w.spent>w.budget;
+                  return (
+                    <div key={i} className="card" style={{ marginBottom:10, padding:16, display:"flex", justifyContent:"space-between", alignItems:"center", borderLeft:"4px solid "+(over?"#c0392b":"#3d8c23") }}>
+                      <div>
+                        <p style={{ fontWeight:600, margin:"0 0 3px", fontSize:15 }}>{w.date}</p>
+                        <p style={{ fontSize:12, color:"#7a7060", margin:0 }}>{w.store}</p>
+                        {w.items?.length>0&&<p style={{ fontSize:11, color:"#aaa", margin:"3px 0 0" }}>{w.items.slice(0,4).join(", ")}{w.items.length>4?" +"+(w.items.length-4)+" more":""}</p>}
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <p style={{ fontWeight:700, fontSize:18, color:over?"#c0392b":"#2d5a1b", margin:0 }}>${w.spent?.toFixed(2)}</p>
+                        <p style={{ fontSize:11, color:"#aaa", margin:0 }}>of ${w.budget} budget</p>
+                        {over&&<p style={{ fontSize:11, color:"#c0392b", margin:0, fontWeight:600 }}>+${(w.spent-w.budget).toFixed(2)} over</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }
