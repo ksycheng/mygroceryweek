@@ -1,0 +1,971 @@
+import { useState, useEffect, useRef } from "react";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+
+const SUPABASE_URL = "https://dmulrdxytfzyuftwwbrn.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtdWxyZHh5dGZ6eXVmdHd3YnJuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0NjIyMTcsImV4cCI6MjA5NDAzODIxN30.XY6X_DWr_Ygq-w2zngjWu5sBofrCTNaRgohgVYVXeD8";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const CATEGORIES = {
+  Produce: ["apple","banana","orange","lettuce","spinach","tomato","potato","onion","garlic","carrot","broccoli","pepper","cucumber","avocado","lemon","lime","grape","strawberry","blueberry","mushroom","celery","zucchini","corn","pea","bean","herb","cilantro","parsley","ginger","sweet potato"],
+  Dairy: ["milk","cheese","butter","yogurt","cream","egg","sour cream","cottage cheese","cream cheese","half and half","whipped cream","kefir","cheddar","mozzarella","parmesan","feta"],
+  Meat: ["chicken","beef","pork","turkey","salmon","tuna","shrimp","bacon","sausage","lamb","steak","ground beef","hot dog","fish","cod","tilapia","ground turkey","ham"],
+  Bakery: ["bread","bagel","muffin","croissant","roll","bun","tortilla","pita","wrap","cake","pie","donut","naan","baguette"],
+  Pantry: ["rice","pasta","flour","sugar","salt","pepper","oil","vinegar","sauce","soup","canned","cereal","oat","coffee","tea","juice","water","soda","chip","cracker","cookie","chocolate","honey","jam","peanut butter","mustard","ketchup","mayo","soy sauce","coconut milk","broth","stock","olive oil","breadcrumb","panko"],
+  Frozen: ["frozen","ice cream","pizza","waffle","fries","edamame"],
+  Household: ["soap","shampoo","toothpaste","toilet paper","paper towel","detergent","cleaner","trash bag","foil","wrap","bag","dish"],
+};
+
+const CATEGORY_META = {
+  Produce:   { bg: "#e8f5e0", accent: "#3d8c23", icon: "🥦" },
+  Dairy:     { bg: "#e8f0fc", accent: "#3a6fd8", icon: "🥛" },
+  Meat:      { bg: "#fde8e8", accent: "#c0392b", icon: "🥩" },
+  Bakery:    { bg: "#fef3e2", accent: "#d4870a", icon: "🍞" },
+  Pantry:    { bg: "#f5f0e8", accent: "#8b6914", icon: "🫙" },
+  Frozen:    { bg: "#e8f7fc", accent: "#1a8fa8", icon: "🧊" },
+  Household: { bg: "#f2e8fc", accent: "#7b3fa8", icon: "🧴" },
+  Other:     { bg: "#f0f0f0", accent: "#666",    icon: "📦" },
+};
+
+const MEAL_CATEGORY_META = {
+  Breakfast: { icon: "🌅", color: "#d4870a", bg: "#fef3e2" },
+  Lunch:     { icon: "☀️", color: "#3a6fd8", bg: "#e8f0fc" },
+  Dinner:    { icon: "🌙", color: "#2d5a1b", bg: "#e8f5e0" },
+  Snack:     { icon: "🍎", color: "#7b3fa8", bg: "#f2e8fc" },
+  Dessert:   { icon: "🍰", color: "#c0392b", bg: "#fde8e8" },
+};
+
+function categorize(item) {
+  const lower = item.toLowerCase();
+  for (const [cat, kws] of Object.entries(CATEGORIES))
+    if (kws.some(k => lower.includes(k))) return cat;
+  return "Other";
+}
+function formatPostalCode(v) {
+  const c = v.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return c.length <= 3 ? c : c.slice(0, 3) + " " + c.slice(3, 6);
+}
+function isValidPostal(v) { return /^[A-Z]\d[A-Z] \d[A-Z]\d$/.test(v); }
+
+const CUISINE_OPTIONS = ["Italian","Asian","Mexican","Canadian/American","Indian","Mediterranean","Middle Eastern","French","Greek","Japanese","Thai","Vegetarian","Vegan","Keto/Low-carb","BBQ & Comfort Food"];
+const MEAL_TYPES = ["Breakfast","Lunch","Dinner","Snacks & Desserts"];
+const DIFFICULTY_COLOR = { Easy: "#3d8c23", Medium: "#d4870a", Hard: "#c0392b" };
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #f7f4ef; }
+  :root {
+    --green: #2d5a1b; --green-light: #3d8c23; --green-pale: #e8f5e0;
+    --cream: #f7f4ef; --card: #ffffff; --border: #e2dbd0;
+    --text: #1a1a1a; --muted: #7a7060; --red: #c0392b;
+    --shadow: 0 1px 3px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.05);
+  }
+  .fade-in { animation: fadeIn 0.35s ease both; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  .pill { display:inline-flex; align-items:center; gap:4px; padding:5px 12px; border-radius:99px; font-size:13px; font-weight:500; cursor:pointer; border:1.5px solid transparent; transition:all 0.18s; font-family:'DM Sans',sans-serif; }
+  .pill.selected { background:var(--green); color:#fff; border-color:var(--green); }
+  .pill.unselected { background:#fff; color:var(--muted); border-color:var(--border); }
+  .pill.unselected:hover { border-color:var(--green-light); color:var(--green); }
+  .btn-primary { background:var(--green); color:#fff; border:none; border-radius:10px; padding:13px 24px; font-size:15px; font-weight:600; cursor:pointer; font-family:'DM Sans',sans-serif; transition:all 0.18s; box-shadow:0 4px 14px rgba(45,90,27,0.3); }
+  .btn-primary:hover { background:var(--green-light); transform:translateY(-1px); }
+  .btn-primary:disabled { background:#aaa; box-shadow:none; cursor:not-allowed; transform:none; }
+  .btn-ghost { background:none; border:1.5px solid var(--border); border-radius:10px; padding:11px 20px; font-size:14px; font-weight:500; cursor:pointer; font-family:'DM Sans',sans-serif; color:var(--muted); transition:all 0.18s; }
+  .btn-ghost:hover { border-color:var(--green); color:var(--green); }
+  .input { width:100%; border:1.5px solid var(--border); border-radius:10px; padding:11px 14px; font-size:15px; font-family:'DM Sans',sans-serif; background:#fff; color:var(--text); outline:none; transition:border 0.18s; }
+  .input:focus { border-color:var(--green-light); }
+  .card { background:var(--card); border-radius:14px; border:1px solid var(--border); box-shadow:var(--shadow); }
+  .section-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.8px; color:var(--muted); margin-bottom:10px; font-family:'DM Sans',sans-serif; }
+  .budget-bar-wrap { height:10px; background:#e8e0d0; border-radius:99px; overflow:hidden; margin-top:6px; }
+  .budget-bar { height:100%; border-radius:99px; transition:width 0.5s ease; }
+  .dish-card { background:#fff; border-radius:14px; border:1px solid var(--border); box-shadow:var(--shadow); overflow:hidden; cursor:pointer; transition:all 0.2s; }
+  .dish-card:hover { transform:translateY(-2px); box-shadow:0 4px 20px rgba(0,0,0,0.12); }
+  .step-num { width:28px; height:28px; border-radius:50%; background:var(--green); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; flex-shrink:0; }
+  .nutrition-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:12px 0; }
+  .nutrition-cell { background:#f7f4ef; border-radius:8px; padding:8px; text-align:center; }
+  .nutrition-val { font-size:16px; font-weight:700; color:#2d5a1b; }
+  .nutrition-lbl { font-size:10px; color:#7a7060; margin-top:2px; }
+  .member-chip { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:99px; background:#e8f5e0; color:#2d5a1b; font-size:13px; font-weight:500; margin:4px; }
+  .meal-cat-header { display:flex; align-items:center; gap:8px; padding:10px 0 8px; margin-top:8px; border-bottom:2px solid var(--border); margin-bottom:12px; }
+`;
+
+function Sparkline({ weeks }) {
+  if (!weeks || weeks.length < 2) return null;
+  const vals = weeks.map(w => w.spent);
+  const max = Math.max(...vals, 1);
+  const W = 120, H = 36;
+  const pts = vals.map((v, i) => ((i / (vals.length - 1)) * W) + "," + (H - (v / max) * H)).join(" ");
+  return (
+    <svg width={W} height={H} style={{ overflow: "visible" }}>
+      <polyline points={pts} fill="none" stroke="#3d8c23" strokeWidth="2" strokeLinejoin="round" />
+      {vals.map((v, i) => <circle key={i} cx={(i / (vals.length - 1)) * W} cy={H - (v / max) * H} r="3" fill="#3d8c23" />)}
+    </svg>
+  );
+}
+
+async function callAI(system, prompt) {
+  const res = await fetch("/api/prices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ system, prompt }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data.text || "";
+}
+
+export default function App() {
+  const [screen, setScreen] = useState("splash");
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authErr, setAuthErr] = useState("");
+  const [obStep, setObStep] = useState(0);
+  const [obBudget, setObBudget] = useState("");
+  const [obPeople, setObPeople] = useState(2);
+  const [obMeals, setObMeals] = useState([]);
+  const [obCuisines, setObCuisines] = useState([]);
+  const [obPostal, setObPostal] = useState("");
+  const [obPostalIn, setObPostalIn] = useState("");
+  const [items, setItems] = useState([]);
+  const [itemInput, setItemInput] = useState("");
+  const [checked, setChecked] = useState({});
+  const [tab, setTab] = useState("list");
+  const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [results, setResults] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [error, setError] = useState("");
+  const [weekSpend, setWeekSpend] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [dishes, setDishes] = useState([]);
+  const [dishesLoading, setDishesLoading] = useState(false);
+  const [selectedDish, setSelectedDish] = useState(null);
+  const [haveIngredients, setHaveIngredients] = useState({});
+  const [dishError, setDishError] = useState("");
+  const [listId, setListId] = useState(null);
+  const [activeMealCat, setActiveMealCat] = useState("All");
+  // Family
+  const [household, setHousehold] = useState(null);
+  const [householdMembers, setHouseholdMembers] = useState([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteStatus, setInviteStatus] = useState("");
+  const [pendingInvites, setPendingInvites] = useState([]);
+  const [showFamily, setShowFamily] = useState(false);
+  const itemInputRef = useRef(null);
+  const saveTimer = useRef(null);
+  const realtimeRef = useRef(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) { setUser(session.user); loadProfile(session.user.id); }
+      else { setTimeout(() => setScreen("login"), 1200); }
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) { setUser(session.user); loadProfile(session.user.id); }
+      else { setUser(null); setProfile(null); setScreen("login"); if (realtimeRef.current) supabase.removeChannel(realtimeRef.current); }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadProfile = async (userId) => {
+    const { data: prof } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (prof) {
+      setProfile(prof);
+      setScreen("main");
+      await loadGroceryList(userId);
+      loadHistory(userId);
+      loadHousehold(userId);
+      checkPendingInvites(userId);
+    } else {
+      setScreen("onboard");
+    }
+  };
+
+  const loadHousehold = async (userId) => {
+    const { data: owned } = await supabase.from("households").select("*").eq("owner_id", userId).single();
+    if (owned) { setHousehold(owned); loadHouseholdMembers(owned.id); subscribeToList(owned.id); return; }
+    const { data: membership } = await supabase.from("household_members").select("*, households(*)").eq("user_id", userId).single();
+    if (membership?.households) { setHousehold(membership.households); loadHouseholdMembers(membership.households.id); subscribeToList(membership.households.id); }
+  };
+
+  const loadHouseholdMembers = async (householdId) => {
+    const { data } = await supabase.from("household_members").select("*, profiles(name)").eq("household_id", householdId);
+    if (data) setHouseholdMembers(data);
+  };
+
+  const subscribeToList = (householdId) => {
+    if (realtimeRef.current) supabase.removeChannel(realtimeRef.current);
+    const channel = supabase.channel("list-" + householdId)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "grocery_lists" },
+        (payload) => { if (payload.new?.items) setItems(payload.new.items); })
+      .subscribe();
+    realtimeRef.current = channel;
+  };
+
+  const checkPendingInvites = async (userId) => {
+    const { data: authData } = await supabase.auth.getUser();
+    const email = authData?.user?.email;
+    if (!email) return;
+    const { data } = await supabase.from("household_invites")
+      .select("*, households(name)")
+      .eq("invited_email", email.toLowerCase())
+      .eq("status", "pending");
+    if (data?.length > 0) setPendingInvites(data);
+  };
+
+  const createHousehold = async () => {
+    if (!user || household) return;
+    const name = (profile?.name || "My") + "'s Family";
+    const { data: hh } = await supabase.from("households").insert({ owner_id: user.id, name }).select().single();
+    if (hh) {
+      setHousehold(hh);
+      if (listId) await supabase.from("grocery_lists").update({ household_id: hh.id }).eq("id", listId);
+      subscribeToList(hh.id);
+    }
+  };
+
+  const inviteFamilyMember = async () => {
+    if (!inviteEmail || !household) return;
+    setInviteStatus("sending");
+    const { error } = await supabase.from("household_invites").insert({ household_id: household.id, invited_email: inviteEmail.trim().toLowerCase(), invited_by: user.id });
+    if (error) { setInviteStatus("error"); return; }
+    setInviteStatus("sent");
+    setInviteEmail("");
+    setTimeout(() => setInviteStatus(""), 3000);
+  };
+
+  const acceptInvite = async (invite) => {
+    await supabase.from("household_members").insert({ household_id: invite.household_id, user_id: user.id, role: "member" });
+    await supabase.from("household_invites").update({ status: "accepted" }).eq("id", invite.id);
+    setPendingInvites([]);
+    loadHousehold(user.id);
+    const { data } = await supabase.from("grocery_lists").select("*").eq("household_id", invite.household_id).single();
+    if (data) { setListId(data.id); setItems(data.items || []); }
+  };
+
+  const declineInvite = async (invite) => {
+    await supabase.from("household_invites").update({ status: "declined" }).eq("id", invite.id);
+    setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
+  };
+
+  const loadGroceryList = async (userId) => {
+    const { data: owned } = await supabase.from("households").select("id").eq("owner_id", userId).single();
+    const { data: membership } = await supabase.from("household_members").select("household_id").eq("user_id", userId).single();
+    const householdId = owned?.id || membership?.household_id;
+    if (householdId) {
+      const { data } = await supabase.from("grocery_lists").select("*").eq("household_id", householdId).single();
+      if (data) { setListId(data.id); setItems(data.items || []); return; }
+    }
+    const { data } = await supabase.from("grocery_lists").select("*").eq("user_id", userId).single();
+    if (data) { setListId(data.id); setItems(data.items || []); }
+    else {
+      const { data: newList } = await supabase.from("grocery_lists").insert({ user_id: userId, items: [] }).select().single();
+      if (newList) setListId(newList.id);
+    }
+  };
+
+  const loadHistory = async (userId) => {
+    const { data } = await supabase.from("spending_history").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(12);
+    if (data) setHistory(data);
+  };
+
+  const saveList = async (newItems) => {
+    if (!listId) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      await supabase.from("grocery_lists").update({ items: newItems, updated_at: new Date().toISOString() }).eq("id", listId);
+    }, 500);
+  };
+
+  const handleLogin = async () => {
+    setAuthErr("");
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPass });
+    if (error) setAuthErr("Invalid email or password.");
+  };
+
+  const handleSignup = async () => {
+    if (!authName || !authEmail || !authPass) { setAuthErr("Please fill in all fields."); return; }
+    setAuthErr("");
+    const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPass });
+    if (error) { setAuthErr(error.message); return; }
+    if (data.user) { setUser(data.user); setScreen("onboard"); }
+  };
+
+  const handleLogout = async () => {
+    if (realtimeRef.current) supabase.removeChannel(realtimeRef.current);
+    await supabase.auth.signOut();
+    setItems([]); setResults(null); setHistory([]); setProfile(null); setHousehold(null); setHouseholdMembers([]);
+  };
+
+  const saveOnboarding = async () => {
+    const prof = { id: user.id, name: authName || user.email.split("@")[0], budget: parseFloat(obBudget), people: obPeople, meals: obMeals, cuisines: obCuisines, postal: obPostal };
+    const { error } = await supabase.from("profiles").upsert(prof);
+    if (!error) {
+      setProfile(prof);
+      const { data: newList } = await supabase.from("grocery_lists").insert({ user_id: user.id, items: [] }).select().single();
+      if (newList) setListId(newList.id);
+      setScreen("main");
+      loadHousehold(user.id);
+      checkPendingInvites(user.id);
+    }
+  };
+
+  const suggestGroceries = async () => {
+    if (!profile) return;
+    setAiLoading(true); setSuggestions([]);
+    try {
+      const system = "You are a meal planning assistant. Return ONLY a JSON array of grocery item strings, no markdown, no explanation.";
+      const prompt = "Suggest a weekly grocery list for " + profile.people + " people who enjoy " + (profile.cuisines||[]).join(", ") + " cuisine. Budget $" + profile.budget + " CAD. Return 15-25 items as a JSON array of strings.";
+      const text = await callAI(system, prompt);
+      const clean = text.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\[[\s\S]*\]/);
+      if (match) setSuggestions(JSON.parse(match[0]));
+    } catch (e) { setError("Could not load suggestions."); }
+    finally { setAiLoading(false); }
+  };
+
+  const loadDishes = async () => {
+    if (!profile) return;
+    setDishesLoading(true); setDishError(""); setDishes([]); setSelectedDish(null);
+    try {
+      const system = "You are a professional chef and nutritionist. Return ONLY valid JSON, no markdown, no code blocks.";
+      const prompt = "Suggest 8 dishes for " + profile.people + " people who enjoy " + (profile.cuisines||[]).join(", ") + " cuisine. Include a mix of Breakfast, Lunch, Dinner, Snack, and Dessert categories. Return ONLY this JSON array: [{\"name\":\"Dish Name\",\"emoji\":\"🍝\",\"mealCategory\":\"Dinner\",\"cuisine\":\"Italian\",\"prepTime\":\"15 mins\",\"cookTime\":\"30 mins\",\"totalTime\":\"45 mins\",\"difficulty\":\"Easy\",\"servings\":" + profile.people + ",\"costPerPersonCAD\":4.50,\"description\":\"One sentence\",\"nutrition\":{\"calories\":450,\"protein\":\"32g\",\"carbs\":\"48g\",\"fat\":\"12g\"},\"tips\":[\"Helpful tip 1\",\"Helpful tip 2\"],\"ingredients\":[{\"name\":\"ingredient\",\"amount\":\"2\",\"unit\":\"cups\",\"notes\":\"optional note\"}],\"steps\":[{\"title\":\"Step title\",\"detail\":\"Detailed step-by-step instruction with technique, temperature, and timing\"}]}]. mealCategory must be one of: Breakfast, Lunch, Dinner, Snack, Dessert. costPerPersonCAD is estimated cost in Canadian dollars per person.";
+      const text = await callAI(system, prompt);
+      const clean = text.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error("parse fail");
+      setDishes(JSON.parse(match[0]));
+    } catch (e) { setDishError("Could not load dish suggestions. Please try again."); }
+    finally { setDishesLoading(false); }
+  };
+
+  const addMissingToList = () => {
+    if (!selectedDish) return;
+    const missing = selectedDish.ingredients.filter((_, idx) => !haveIngredients[idx]);
+    const newItems = missing.map(ing => ({ id: Date.now() + Math.random(), name: ing.amount + " " + ing.unit + " " + ing.name, category: categorize(ing.name) }));
+    const updated = [...items];
+    newItems.forEach(ni => { if (!updated.find(i => i.name.toLowerCase() === ni.name.toLowerCase())) updated.push(ni); });
+    setItems(updated); saveList(updated);
+    setSelectedDish(null); setHaveIngredients({}); setTab("list");
+    alert(missing.length + " ingredient" + (missing.length !== 1 ? "s" : "") + " added to your grocery list!");
+  };
+
+  const addSuggestion = (s) => {
+    if (items.find(i => i.name.toLowerCase() === s.toLowerCase())) return;
+    const updated = [...items, { id: Date.now() + Math.random(), name: s, category: categorize(s) }];
+    setItems(updated); saveList(updated);
+  };
+
+  const addItem = () => {
+    const t = itemInput.trim(); if (!t) return;
+    const updated = [...items, { id: Date.now(), name: t, category: categorize(t) }];
+    setItems(updated); saveList(updated);
+    setItemInput("");
+    if (itemInputRef.current) itemInputRef.current.focus();
+  };
+
+  const removeItem = (id) => {
+    const updated = items.filter(i => i.id !== id);
+    setItems(updated); saveList(updated);
+  };
+
+  const toggleCheck = (id) => setChecked(p => ({ ...p, [id]: !p[id] }));
+
+  const findPrices = async () => {
+    if (items.length === 0) { setError("Add items to your list first!"); return; }
+    if (!profile || !profile.postal) { setError("No postal code found."); return; }
+    setError(""); setLoading(true); setResults(null);
+    const itemNames = items.map(i => i.name).join(", ");
+    const budget = profile.budget || 200;
+    const postalPrefix = profile.postal.slice(0, 3);
+    try {
+      const system = "You are a Canadian grocery price comparison expert. Return ONLY valid JSON with no markdown, no code blocks.";
+      const prompt = "Find best grocery prices for stores specifically located nearest to Canadian postal code " + profile.postal + " (postal prefix " + postalPrefix + ", Ontario). Only suggest real supermarkets actually close to this postal code. Do not suggest stores in other cities. Items: " + itemNames + ". Budget: $" + budget + " CAD.\n\nReturn ONLY this JSON:\n{\"combinations\":[{\"rank\":1,\"label\":\"Store name\",\"stores\":[{\"name\":\"Store Name\",\"address\":\"Full street address, City, ON\",\"distanceKm\":2.1,\"hours\":\"Mon-Sun 7am-11pm\"}],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":1,\"breakdown\":[{\"store\":\"Store\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":2,\"label\":\"Two stores\",\"stores\":[{\"name\":\"Store A\",\"address\":\"Full address, City, ON\",\"distanceKm\":1.5,\"hours\":\"Mon-Sun 8am-10pm\"},{\"name\":\"Store B\",\"address\":\"Full address, City, ON\",\"distanceKm\":3.2,\"hours\":\"Mon-Sat 7am-11pm, Sun 8am-10pm\"}],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":2,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"},{\"rank\":3,\"label\":\"Three stores\",\"stores\":[{\"name\":\"Store A\",\"address\":\"Full address\",\"distanceKm\":1.5,\"hours\":\"Mon-Sun 7am-11pm\"},{\"name\":\"Store B\",\"address\":\"Full address\",\"distanceKm\":2.8,\"hours\":\"Mon-Sun 8am-10pm\"},{\"name\":\"Store C\",\"address\":\"Full address\",\"distanceKm\":4.1,\"hours\":\"Mon-Sat 9am-9pm\"}],\"totalCAD\":0.00,\"savingsVsWorst\":0.00,\"trips\":3,\"breakdown\":[{\"store\":\"Store A\",\"items\":[\"item\"],\"subtotal\":0.00}],\"tip\":\"tip\"}],\"budgetCAD\":" + budget + ",\"withinBudget\":true,\"overBy\":0.00,\"perItemPrices\":[{\"name\":\"item\",\"store\":\"store\",\"price\":0.00}]}\n\nAll prices CAD. Stores near " + profile.postal + ". Provide real addresses and realistic hours. Note addresses are approximate — user should verify.";
+      const text = await callAI(system, prompt);
+      const clean = text.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("parse fail");
+      const parsed = JSON.parse(match[0]);
+      setResults(parsed);
+      setWeekSpend(parsed.combinations?.[0]?.totalCAD || 0);
+      setTab("compare");
+    } catch (e) { setError("Could not fetch prices. Please try again."); }
+    finally { setLoading(false); }
+  };
+
+  const saveWeek = async () => {
+    if (!results || !user) return;
+    const best = results.combinations?.[0];
+    const week = { user_id: user.id, date: new Date().toISOString().split("T")[0], spent: best?.totalCAD || 0, store: best?.label || "", budget: profile?.budget || 0, items: items.map(i => i.name) };
+    const { error } = await supabase.from("spending_history").insert(week);
+    if (!error) { loadHistory(user.id); alert("Week saved to your history!"); }
+  };
+
+  const grouped = items.reduce((acc, item) => { (acc[item.category] = acc[item.category] || []).push(item); return acc; }, {});
+  const budget = profile?.budget || 0;
+  const avgSpend = history.length ? (history.reduce((s, w) => s + (w.spent || 0), 0) / history.length).toFixed(2) : null;
+  const spentPct = weekSpend && budget ? Math.min((weekSpend / budget) * 100, 100) : 0;
+  const overBudget = weekSpend && budget && weekSpend > budget;
+
+  const mealCategories = ["All", "Breakfast", "Lunch", "Dinner", "Snack", "Dessert"];
+  const filteredDishes = activeMealCat === "All" ? dishes : dishes.filter(d => d.mealCategory === activeMealCat);
+  const dishesByCategory = filteredDishes.reduce((acc, dish) => {
+    const cat = dish.mealCategory || "Dinner";
+    acc[cat] = acc[cat] || [];
+    acc[cat].push(dish);
+    return acc;
+  }, {});
+
+  if (screen === "splash") return (
+    <div style={{ minHeight:"100vh", background:"#2d5a1b", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+      <style>{css}</style>
+      <div style={{ fontSize:52, marginBottom:16 }}>🛒</div>
+      <h1 style={{ fontFamily:"'DM Serif Display',serif", color:"#e8f5e0", fontSize:32 }}>MyGroceryWeek</h1>
+      <p style={{ color:"#8fa87a", marginTop:8, fontFamily:"'DM Sans',sans-serif", fontSize:14 }}>Smart Canadian grocery planning</p>
+    </div>
+  );
+
+  if (screen === "login") return (
+    <div style={{ minHeight:"100vh", background:"#f7f4ef", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, fontFamily:"'DM Sans',sans-serif" }}>
+      <style>{css}</style>
+      <div style={{ width:"100%", maxWidth:380 }} className="fade-in">
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>🛒</div>
+          <h1 style={{ fontFamily:"'DM Serif Display',serif", fontSize:28, color:"#2d5a1b" }}>MyGroceryWeek</h1>
+          <p style={{ color:"#7a7060", fontSize:14, marginTop:4 }}>Smart Canadian grocery planning</p>
+        </div>
+        <div className="card" style={{ padding:24 }}>
+          <p className="section-label">Sign In</p>
+          {authErr && <div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:8, padding:"10px 14px", marginBottom:14, color:"#c0392b", fontSize:13 }}>⚠️ {authErr}</div>}
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            <input className="input" placeholder="Email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
+            <input className="input" type="password" placeholder="Password" value={authPass} onChange={e => setAuthPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()} />
+            <button className="btn-primary" style={{ width:"100%", marginTop:4 }} onClick={handleLogin}>Sign In</button>
+          </div>
+          <p style={{ textAlign:"center", marginTop:16, fontSize:14, color:"#7a7060" }}>
+            No account? <span style={{ color:"#2d5a1b", fontWeight:600, cursor:"pointer" }} onClick={() => { setAuthErr(""); setScreen("signup"); }}>Create one</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (screen === "signup") return (
+    <div style={{ minHeight:"100vh", background:"#f7f4ef", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, fontFamily:"'DM Sans',sans-serif" }}>
+      <style>{css}</style>
+      <div style={{ width:"100%", maxWidth:380 }} className="fade-in">
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <div style={{ fontSize:40, marginBottom:8 }}>🛒</div>
+          <h1 style={{ fontFamily:"'DM Serif Display',serif", fontSize:28, color:"#2d5a1b" }}>Create Account</h1>
+          <p style={{ color:"#7a7060", fontSize:14, marginTop:4 }}>Start saving on groceries today</p>
+        </div>
+        <div className="card" style={{ padding:24 }}>
+          {authErr && <div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:8, padding:"10px 14px", marginBottom:14, color:"#c0392b", fontSize:13 }}>⚠️ {authErr}</div>}
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            <input className="input" placeholder="Your name" value={authName} onChange={e => setAuthName(e.target.value)} />
+            <input className="input" placeholder="Email address" value={authEmail} onChange={e => setAuthEmail(e.target.value)} />
+            <input className="input" type="password" placeholder="Choose a password" value={authPass} onChange={e => setAuthPass(e.target.value)} />
+            <button className="btn-primary" style={{ width:"100%", marginTop:4 }} onClick={handleSignup}>Create Account</button>
+          </div>
+          <p style={{ textAlign:"center", marginTop:16, fontSize:14, color:"#7a7060" }}>
+            Have an account? <span style={{ color:"#2d5a1b", fontWeight:600, cursor:"pointer" }} onClick={() => { setAuthErr(""); setScreen("login"); }}>Sign in</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (screen === "onboard") {
+    const steps = [
+      { title:"Your weekly budget", subtitle:"We'll alert you if you're overspending" },
+      { title:"Who are you shopping for?", subtitle:"Helps us suggest the right quantities" },
+      { title:"What meals do you need?", subtitle:"Pick all that apply" },
+      { title:"Cuisine preferences", subtitle:"We'll tailor grocery suggestions to your taste" },
+      { title:"Your location", subtitle:"To find nearby Canadian supermarkets" },
+    ];
+    const s = steps[obStep];
+    const canNext = [obBudget && parseFloat(obBudget) > 0, true, obMeals.length > 0, obCuisines.length > 0, isValidPostal(obPostal)][obStep];
+    return (
+      <div style={{ minHeight:"100vh", background:"#f7f4ef", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, fontFamily:"'DM Sans',sans-serif" }}>
+        <style>{css}</style>
+        <div style={{ width:"100%", maxWidth:420 }} className="fade-in">
+          <div style={{ display:"flex", gap:6, marginBottom:28 }}>
+            {steps.map((_, i) => <div key={i} style={{ flex:1, height:4, borderRadius:99, background:i<=obStep?"#2d5a1b":"#e2dbd0", transition:"background 0.3s" }} />)}
+          </div>
+          <div className="card" style={{ padding:28 }}>
+            <p style={{ fontSize:13, color:"#7a7060", marginBottom:4 }}>Step {obStep+1} of {steps.length}</p>
+            <h2 style={{ fontFamily:"'DM Serif Display',serif", fontSize:24, color:"#2d5a1b", marginBottom:4 }}>{s.title}</h2>
+            <p style={{ fontSize:14, color:"#7a7060", marginBottom:24 }}>{s.subtitle}</p>
+            {obStep===0&&(<div style={{ position:"relative" }}><span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"#7a7060" }}>$</span><input className="input" style={{ paddingLeft:28 }} type="number" placeholder="e.g. 200" value={obBudget} onChange={e=>setObBudget(e.target.value)}/><p style={{ fontSize:12, color:"#aaa", marginTop:6 }}>Per week, in Canadian dollars</p></div>)}
+            {obStep===1&&(<div style={{ display:"flex", alignItems:"center", gap:16, justifyContent:"center", padding:"8px 0" }}><button className="btn-ghost" style={{ fontSize:22, padding:"10px 18px" }} onClick={()=>setObPeople(Math.max(1,obPeople-1))}>-</button><div style={{ textAlign:"center" }}><div style={{ fontSize:40, fontFamily:"'DM Serif Display',serif", color:"#2d5a1b" }}>{obPeople}</div><div style={{ fontSize:13, color:"#7a7060" }}>people</div></div><button className="btn-ghost" style={{ fontSize:22, padding:"10px 18px" }} onClick={()=>setObPeople(Math.min(12,obPeople+1))}>+</button></div>)}
+            {obStep===2&&(<div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>{MEAL_TYPES.map(m=><span key={m} className={"pill "+(obMeals.includes(m)?"selected":"unselected")} onClick={()=>setObMeals(p=>p.includes(m)?p.filter(x=>x!==m):[...p,m])}>{m}</span>)}</div>)}
+            {obStep===3&&(<div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>{CUISINE_OPTIONS.map(c=><span key={c} className={"pill "+(obCuisines.includes(c)?"selected":"unselected")} onClick={()=>setObCuisines(p=>p.includes(c)?p.filter(x=>x!==c):[...p,c])}>{c}</span>)}</div>)}
+            {obStep===4&&(<div><input className="input" placeholder="e.g. M5V 3A8" value={obPostalIn} maxLength={7} onChange={e=>{const f=formatPostalCode(e.target.value);setObPostalIn(f);if(isValidPostal(f))setObPostal(f);else setObPostal("");}} style={{ textTransform:"uppercase", letterSpacing:"1px" }}/><p style={{ fontSize:12, color:"#aaa", marginTop:6 }}>Canadian postal code: A1A 1A1</p>{isValidPostal(obPostal)&&<p style={{ fontSize:13, color:"#3d8c23", marginTop:6 }}>Valid postal code ✓</p>}</div>)}
+            <div style={{ display:"flex", gap:10, marginTop:28 }}>
+              {obStep>0&&<button className="btn-ghost" style={{ flex:1 }} onClick={()=>setObStep(s=>s-1)}>Back</button>}
+              <button className="btn-primary" style={{ flex:2 }} disabled={!canNext} onClick={()=>{if(obStep<steps.length-1)setObStep(s=>s+1);else saveOnboarding();}}>{obStep===steps.length-1?"Let's go!":"Continue"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#f7f4ef", fontFamily:"'DM Sans',sans-serif", color:"#1a1a1a" }}>
+      <style>{css}</style>
+
+      {/* Pending invites banner */}
+      {pendingInvites.length > 0 && pendingInvites.map(invite => (
+        <div key={invite.id} style={{ background:"#2d5a1b", padding:"12px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+          <p style={{ color:"#e8f5e0", fontSize:13 }}>👨‍👩‍👧 You've been invited to join <strong>{invite.households?.name || "a family"}</strong></p>
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={()=>acceptInvite(invite)} style={{ background:"#e8f5e0", color:"#2d5a1b", border:"none", borderRadius:8, padding:"6px 14px", fontSize:12, fontWeight:700, cursor:"pointer" }}>Accept</button>
+            <button onClick={()=>declineInvite(invite)} style={{ background:"none", border:"1px solid #4a7a30", borderRadius:8, padding:"6px 14px", fontSize:12, color:"#8fa87a", cursor:"pointer" }}>Decline</button>
+          </div>
+        </div>
+      ))}
+
+      <div style={{ background:"#2d5a1b", padding:"20px 20px 0", position:"sticky", top:0, zIndex:20, boxShadow:"0 2px 12px rgba(0,0,0,0.18)" }}>
+        <div style={{ maxWidth:640, margin:"0 auto" }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
+            <div>
+              <h1 style={{ fontFamily:"'DM Serif Display',serif", fontSize:20, color:"#e8f5e0", margin:0 }}>🛒 MyGroceryWeek</h1>
+              <p style={{ fontSize:12, color:"#8fa87a", margin:0 }}>Hi {profile?.name?.split(" ")[0] || ""} - {profile?.postal || ""} {household ? "👨‍👩‍👧 " + household.name : ""}</p>
+            </div>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              {results&&<button onClick={saveWeek} style={{ background:"#e8f5e0", color:"#2d5a1b", border:"none", borderRadius:8, padding:"7px 12px", fontSize:12, fontWeight:600, cursor:"pointer" }}>💾 Save Week</button>}
+              <button onClick={()=>setShowFamily(f=>!f)} style={{ background:showFamily?"#e8f5e0":"none", border:"1px solid #4a7a30", borderRadius:8, padding:"7px 12px", fontSize:12, color:showFamily?"#2d5a1b":"#8fa87a", cursor:"pointer" }}>👨‍👩‍👧</button>
+              <button onClick={handleLogout} style={{ background:"none", border:"1px solid #4a7a30", borderRadius:8, padding:"7px 12px", fontSize:12, color:"#8fa87a", cursor:"pointer" }}>Sign out</button>
+            </div>
+          </div>
+          {budget>0&&(
+            <div style={{ marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#8fa87a", marginBottom:4 }}>
+                <span>{overBudget?"Over budget!":"Budget: $"+budget+" CAD/week"}</span>
+                {weekSpend&&<span style={{ color:overBudget?"#ff9a8a":"#a8d878", fontWeight:600 }}>${weekSpend.toFixed(2)} spent</span>}
+              </div>
+              <div className="budget-bar-wrap"><div className="budget-bar" style={{ width:spentPct+"%", background:overBudget?"#c0392b":spentPct>80?"#d4870a":"#3d8c23" }} /></div>
+            </div>
+          )}
+          <div style={{ display:"flex" }}>
+            {[["list","📋 List"],["meals","🍽️ Meals"],["compare","📊 Compare"],["history","📈 History"]].map(([t,l])=>(
+              <button key={t} onClick={()=>setTab(t)} style={{ flex:1, background:"none", border:"none", padding:"10px 0", fontSize:12, fontWeight:600, color:tab===t?"#e8f5e0":"#6a8a5a", borderBottom:tab===t?"2px solid #e8f5e0":"2px solid transparent", cursor:"pointer", transition:"all 0.18s" }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:640, margin:"0 auto", padding:"20px 16px 48px" }} className="fade-in">
+
+        {/* FAMILY PANEL */}
+        {showFamily&&(
+          <div className="card" style={{ padding:20, marginBottom:16 }} className="fade-in">
+            <p className="section-label">👨‍👩‍👧 Family Sharing</p>
+            {!household?(
+              <div>
+                <p style={{ fontSize:14, color:"#7a7060", marginBottom:12 }}>Create a household to share your grocery list with family members in real time.</p>
+                <button onClick={createHousehold} className="btn-primary" style={{ width:"100%" }}>Create Family Household</button>
+              </div>
+            ):(
+              <div>
+                <p style={{ fontSize:14, fontWeight:600, color:"#2d5a1b", marginBottom:8 }}>{household.name}</p>
+                {householdMembers.length > 0 && (
+                  <div style={{ marginBottom:12 }}>
+                    <p style={{ fontSize:12, color:"#7a7060", marginBottom:6 }}>Members:</p>
+                    <div style={{ display:"flex", flexWrap:"wrap" }}>
+                      {householdMembers.map((m,i)=>(
+                        <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"6px 12px", borderRadius:99, background:"#e8f5e0", color:"#2d5a1b", fontSize:13, fontWeight:500, margin:4 }}>
+                          👤 {m.profiles?.name || "Member"}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p style={{ fontSize:12, color:"#7a7060", marginBottom:8 }}>Invite by email:</p>
+                <div style={{ display:"flex", gap:8 }}>
+                  <input className="input" placeholder="family@email.com" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&inviteFamilyMember()} />
+                  <button onClick={inviteFamilyMember} disabled={!inviteEmail} className="btn-primary" style={{ whiteSpace:"nowrap", padding:"11px 16px" }}>Send Invite</button>
+                </div>
+                {inviteStatus==="sent"&&<p style={{ fontSize:13, color:"#3d8c23", marginTop:8 }}>✓ Invite sent! They'll see it when they log in.</p>}
+                {inviteStatus==="error"&&<p style={{ fontSize:13, color:"#c0392b", marginTop:8 }}>Failed to send invite. Try again.</p>}
+                <p style={{ fontSize:11, color:"#aaa", marginTop:8 }}>📡 List changes sync instantly for all members.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* LIST TAB */}
+        {tab==="list"&&(
+          <div>
+            <div className="card" style={{ padding:16, marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                <p className="section-label" style={{ margin:0 }}>✨ AI Suggestions</p>
+                <button onClick={suggestGroceries} disabled={aiLoading} style={{ background:"#e8f5e0", border:"none", borderRadius:8, padding:"6px 14px", fontSize:12, fontWeight:600, color:"#2d5a1b", cursor:"pointer" }}>
+                  {aiLoading?"Loading...":suggestions.length?"Refresh":"Suggest for me"}
+                </button>
+              </div>
+              {aiLoading&&<p style={{ fontSize:13, color:"#aaa", fontStyle:"italic" }}>Generating suggestions...</p>}
+              {suggestions.length>0&&(
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {suggestions.map((s,i)=>{
+                    const already=items.find(it=>it.name.toLowerCase()===s.toLowerCase());
+                    return <span key={i} onClick={()=>!already&&addSuggestion(s)} style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"5px 11px", borderRadius:99, fontSize:13, cursor:already?"default":"pointer", background:already?"#f0f0f0":"#fff", color:already?"#bbb":"#2d5a1b", border:"1.5px solid "+(already?"#e0e0e0":"#b8dba0"), fontWeight:500 }}>{already?"Added":"+"} {s}</span>;
+                  })}
+                </div>
+              )}
+              {!aiLoading&&suggestions.length===0&&<p style={{ fontSize:13, color:"#aaa" }}>Tap "Suggest for me" to get a personalized grocery list.</p>}
+            </div>
+
+            <div className="card" style={{ padding:16, marginBottom:14 }}>
+              <p className="section-label">➕ Add Item</p>
+              <div style={{ display:"flex", gap:8 }}>
+                <input ref={itemInputRef} className="input" placeholder="e.g. whole milk, chicken breast..." value={itemInput} onChange={e=>setItemInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
+                <button onClick={addItem} style={{ background:"#2d5a1b", color:"#fff", border:"none", borderRadius:10, padding:"11px 18px", fontSize:20, cursor:"pointer", fontWeight:700 }}>+</button>
+              </div>
+            </div>
+
+            {Object.entries(grouped).map(([cat,catItems])=>{
+              const meta=CATEGORY_META[cat]||CATEGORY_META.Other;
+              return (
+                <div key={cat} className="card" style={{ marginBottom:12, overflow:"hidden" }}>
+                  <div style={{ background:meta.bg, padding:"9px 16px", display:"flex", alignItems:"center", gap:8, borderBottom:"2px solid "+meta.accent+"22" }}>
+                    <span>{meta.icon}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color:meta.accent, textTransform:"uppercase", letterSpacing:"0.5px" }}>{cat}</span>
+                    <span style={{ marginLeft:"auto", fontSize:12, color:meta.accent, fontWeight:600 }}>{catItems.length}</span>
+                  </div>
+                  {catItems.map(item=>(
+                    <div key={item.id} style={{ display:"flex", alignItems:"center", padding:"11px 16px", borderBottom:"1px solid #f5f0e8", gap:12 }}>
+                      <input type="checkbox" checked={!!checked[item.id]} onChange={()=>toggleCheck(item.id)} style={{ width:17, height:17, accentColor:meta.accent, cursor:"pointer", flexShrink:0 }}/>
+                      <span style={{ flex:1, fontSize:15, textDecoration:checked[item.id]?"line-through":"none", color:checked[item.id]?"#bbb":"#1a1a1a" }}>{item.name}</span>
+                      <button onClick={()=>removeItem(item.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:15, color:"#ccc", padding:"2px 6px" }}>x</button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+
+            {items.length===0&&(
+              <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>🛍️</div>
+                <p style={{ fontStyle:"italic", fontSize:15 }}>Your list is empty. Use suggestions or add items above.</p>
+                <button onClick={()=>setTab("meals")} className="btn-ghost" style={{ marginTop:16 }}>Browse Meal Ideas 🍽️</button>
+              </div>
+            )}
+
+            {items.length>0&&(
+              <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:8 }}>
+                <button onClick={findPrices} disabled={loading} className="btn-primary" style={{ width:"100%", padding:16, fontSize:16 }}>
+                  {loading?"🔍 Searching Canadian stores...":"🔍 Find Best Prices and Compare Stores"}
+                </button>
+                <button onClick={()=>{const updated=[];setItems(updated);saveList(updated);setResults(null);setChecked({});setSuggestions([]);setWeekSpend(null);}} style={{ background:"none", border:"1.5px solid #f5c0c0", borderRadius:10, padding:12, fontSize:13, color:"#c0392b", cursor:"pointer" }}>🗑 Clear List</button>
+              </div>
+            )}
+            {error&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:10, padding:"12px 16px", marginTop:12, color:"#c0392b", fontSize:14 }}>⚠️ {error}</div>}
+          </div>
+        )}
+
+        {/* MEALS TAB */}
+        {tab==="meals"&&(
+          <div>
+            {selectedDish?(
+              <div className="fade-in">
+                <button onClick={()=>{setSelectedDish(null);setHaveIngredients({});}} style={{ background:"none", border:"none", cursor:"pointer", color:"#2d5a1b", fontSize:14, fontWeight:600, marginBottom:16, display:"flex", alignItems:"center", gap:6 }}>← Back to dishes</button>
+                <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+                  <div style={{ fontSize:64, display:"flex", alignItems:"center", justifyContent:"center", padding:24, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)" }}>{selectedDish.emoji}</div>
+                  <div style={{ padding:20 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
+                      <h2 style={{ fontFamily:"'DM Serif Display',serif", fontSize:22, color:"#2d5a1b" }}>{selectedDish.name}</h2>
+                      <span style={{ fontSize:12, fontWeight:600, color:DIFFICULTY_COLOR[selectedDish.difficulty]||"#666", background:"#f7f4ef", padding:"3px 10px", borderRadius:99, flexShrink:0, marginLeft:8 }}>{selectedDish.difficulty}</span>
+                    </div>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+                      {selectedDish.mealCategory&&<span style={{ fontSize:11, fontWeight:600, padding:"2px 10px", borderRadius:99, background:(MEAL_CATEGORY_META[selectedDish.mealCategory]||{}).bg||"#f0f0f0", color:(MEAL_CATEGORY_META[selectedDish.mealCategory]||{}).color||"#666" }}>{(MEAL_CATEGORY_META[selectedDish.mealCategory]||{}).icon} {selectedDish.mealCategory}</span>}
+                      <span style={{ fontSize:11, padding:"2px 10px", borderRadius:99, background:"#f0f8ea", color:"#3d8c23", fontWeight:600 }}>{selectedDish.cuisine}</span>
+                    </div>
+                    <p style={{ fontSize:14, color:"#7a7060", marginBottom:14 }}>{selectedDish.description}</p>
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
+                      <div style={{ background:"#f7f4ef", borderRadius:10, padding:"10px", textAlign:"center" }}>
+                        <div style={{ fontSize:18 }}>⏱</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:"#2d5a1b" }}>{selectedDish.totalTime||selectedDish.cookTime}</div>
+                        <div style={{ fontSize:10, color:"#aaa" }}>Total Time</div>
+                      </div>
+                      <div style={{ background:"#f7f4ef", borderRadius:10, padding:"10px", textAlign:"center" }}>
+                        <div style={{ fontSize:18 }}>👥</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:"#2d5a1b" }}>{selectedDish.servings} people</div>
+                        <div style={{ fontSize:10, color:"#aaa" }}>Servings</div>
+                      </div>
+                      <div style={{ background:"#f7f4ef", borderRadius:10, padding:"10px", textAlign:"center" }}>
+                        <div style={{ fontSize:18 }}>💰</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:"#2d5a1b" }}>${selectedDish.costPerPersonCAD?.toFixed(2)||"~"}/person</div>
+                        <div style={{ fontSize:10, color:"#aaa" }}>Est. Cost CAD</div>
+                      </div>
+                    </div>
+                    {selectedDish.nutrition&&(
+                      <div>
+                        <p style={{ fontSize:11, fontWeight:600, color:"#7a7060", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:8 }}>Nutrition per serving</p>
+                        <div className="nutrition-grid">
+                          {[["🔥",selectedDish.nutrition.calories,"cal"],["💪",selectedDish.nutrition.protein,"protein"],["🌾",selectedDish.nutrition.carbs,"carbs"],["🫒",selectedDish.nutrition.fat,"fat"]].map(([icon,val,lbl],i)=>(
+                            <div key={i} className="nutrition-cell">
+                              <div style={{ fontSize:16 }}>{icon}</div>
+                              <div className="nutrition-val">{val}</div>
+                              <div className="nutrition-lbl">{lbl}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {selectedDish.prepTime&&(
+                      <div style={{ display:"flex", gap:16, fontSize:12, color:"#7a7060", marginTop:8 }}>
+                        <span>🥄 Prep: {selectedDish.prepTime}</span>
+                        <span>🍳 Cook: {selectedDish.cookTime}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {selectedDish.tips&&selectedDish.tips.length>0&&(
+                  <div className="card" style={{ padding:16, marginBottom:16, background:"#fef9f0", border:"1px solid #f0e0b0" }}>
+                    <p className="section-label" style={{ color:"#d4870a" }}>💡 Chef's Tips</p>
+                    {selectedDish.tips.map((tip,i)=>(
+                      <p key={i} style={{ fontSize:13, color:"#7a7060", marginBottom:i<selectedDish.tips.length-1?8:0, paddingLeft:12, borderLeft:"2px solid #d4870a" }}>{tip}</p>
+                    ))}
+                  </div>
+                )}
+
+                <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+                  <div style={{ padding:"14px 16px", background:"#f7f4ef", borderBottom:"1px solid #e2dbd0" }}>
+                    <p className="section-label" style={{ margin:0 }}>🥕 Ingredients — check what you already have</p>
+                  </div>
+                  {selectedDish.ingredients&&selectedDish.ingredients.map((ing,idx)=>(
+                    <div key={idx} style={{ display:"flex", alignItems:"center", padding:"12px 16px", borderBottom:"1px solid #f5f0e8", gap:12 }}>
+                      <input type="checkbox" checked={!!haveIngredients[idx]} onChange={()=>setHaveIngredients(p=>({...p,[idx]:!p[idx]}))} style={{ width:18, height:18, accentColor:"#3d8c23", cursor:"pointer", flexShrink:0 }}/>
+                      <div style={{ flex:1 }}>
+                        <span style={{ fontSize:15, textDecoration:haveIngredients[idx]?"line-through":"none", color:haveIngredients[idx]?"#bbb":"#1a1a1a" }}><strong>{ing.amount} {ing.unit}</strong> {ing.name}</span>
+                        {ing.notes&&<p style={{ fontSize:12, color:"#aaa", margin:0 }}>{ing.notes}</p>}
+                      </div>
+                      {haveIngredients[idx]&&<span style={{ fontSize:12, color:"#3d8c23", fontWeight:600 }}>Have it ✓</span>}
+                    </div>
+                  ))}
+                  <div style={{ padding:16, background:"#f7f4ef", borderTop:"1px solid #e2dbd0" }}>
+                    <p style={{ fontSize:13, color:"#7a7060", marginBottom:10 }}>{Object.values(haveIngredients).filter(Boolean).length} of {selectedDish.ingredients?.length} ingredients already at home</p>
+                    <button onClick={addMissingToList} className="btn-primary" style={{ width:"100%" }}>
+                      Add {selectedDish.ingredients?.filter((_,idx)=>!haveIngredients[idx]).length} missing items to Grocery List
+                    </button>
+                  </div>
+                </div>
+
+                <div className="card" style={{ overflow:"hidden" }}>
+                  <div style={{ padding:"14px 16px", background:"#f7f4ef", borderBottom:"1px solid #e2dbd0" }}>
+                    <p className="section-label" style={{ margin:0 }}>👨‍🍳 Step-by-Step Instructions</p>
+                  </div>
+                  {selectedDish.steps&&selectedDish.steps.map((step,idx)=>(
+                    <div key={idx} style={{ display:"flex", gap:14, padding:"16px 16px", borderBottom:"1px solid #f5f0e8", alignItems:"flex-start" }}>
+                      <span className="step-num">{idx+1}</span>
+                      <div>
+                        {step.title&&<p style={{ fontSize:13, fontWeight:700, color:"#2d5a1b", margin:"0 0 4px" }}>{step.title}</p>}
+                        <p style={{ fontSize:14, color:"#1a1a1a", lineHeight:1.7, margin:0 }}>{step.detail||step}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ):(
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                  <div>
+                    <h2 style={{ fontFamily:"'DM Serif Display',serif", fontSize:22, color:"#2d5a1b", margin:0 }}>Meal Ideas</h2>
+                    <p style={{ fontSize:13, color:"#7a7060", marginTop:2 }}>Sorted by meal type with cost & time</p>
+                  </div>
+                  <button onClick={loadDishes} disabled={dishesLoading} style={{ background:"#e8f5e0", border:"none", borderRadius:8, padding:"8px 14px", fontSize:12, fontWeight:600, color:"#2d5a1b", cursor:"pointer" }}>
+                    {dishesLoading?"Loading...":dishes.length?"Refresh":"Suggest Dishes"}
+                  </button>
+                </div>
+
+                {dishes.length>0&&(
+                  <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:8, marginBottom:12 }}>
+                    {mealCategories.map(cat=>(
+                      <button key={cat} onClick={()=>setActiveMealCat(cat)} style={{ whiteSpace:"nowrap", padding:"6px 14px", borderRadius:99, border:"1.5px solid", borderColor:activeMealCat===cat?"#2d5a1b":"#e2dbd0", background:activeMealCat===cat?"#2d5a1b":"#fff", color:activeMealCat===cat?"#fff":"#7a7060", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        {cat==="All"?"All Meals":(MEAL_CATEGORY_META[cat]?.icon||"")+" "+cat}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {dishError&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:10, padding:"12px 16px", marginBottom:16, color:"#c0392b", fontSize:14 }}>⚠️ {dishError}</div>}
+                {dishesLoading&&<div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}><div style={{ fontSize:40, marginBottom:12 }}>🍳</div><p style={{ fontStyle:"italic" }}>Finding dishes based on your preferences...</p></div>}
+
+                {!dishesLoading&&dishes.length===0&&(
+                  <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                    <div style={{ fontSize:48, marginBottom:12 }}>🍽️</div>
+                    <p style={{ fontStyle:"italic", fontSize:15, marginBottom:16 }}>Get personalized dish recommendations with cost and time estimates.</p>
+                    <button onClick={loadDishes} className="btn-primary">Suggest Dishes for Me</button>
+                  </div>
+                )}
+
+                {activeMealCat==="All"?(
+                  Object.entries(dishesByCategory).map(([cat, catDishes])=>{
+                    const meta = MEAL_CATEGORY_META[cat]||{ icon:"🍽️", color:"#666", bg:"#f0f0f0" };
+                    return (
+                      <div key={cat}>
+                        <div className="meal-cat-header">
+                          <span style={{ fontSize:20 }}>{meta.icon}</span>
+                          <span style={{ fontSize:14, fontWeight:700, color:meta.color }}>{cat}</span>
+                          <span style={{ fontSize:12, color:"#aaa" }}>({catDishes.length} {catDishes.length===1?"dish":"dishes"})</span>
+                        </div>
+                        {catDishes.map((dish,i)=>(<DishCard key={i} dish={dish} onClick={()=>{setSelectedDish(dish);setHaveIngredients({});}} />))}
+                      </div>
+                    );
+                  })
+                ):(
+                  filteredDishes.length===0
+                    ? <div style={{ textAlign:"center", padding:"32px", color:"#bbb" }}><p>No {activeMealCat} dishes yet. Click Refresh to generate more.</p></div>
+                    : filteredDishes.map((dish,i)=>(<DishCard key={i} dish={dish} onClick={()=>{setSelectedDish(dish);setHaveIngredients({});}} />))
+                )}
+
+                {dishes.length>0&&<button onClick={loadDishes} disabled={dishesLoading} className="btn-ghost" style={{ width:"100%", marginTop:8 }}>🔄 Get 8 More Dish Ideas</button>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* COMPARE TAB */}
+        {tab==="compare"&&(
+          <div>
+            {!results&&<div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}><div style={{ fontSize:48, marginBottom:12 }}>📊</div><p style={{ fontStyle:"italic", fontSize:15 }}>Build your list and tap Find Best Prices.</p><button onClick={()=>setTab("list")} className="btn-ghost" style={{ marginTop:16 }}>Go to List</button></div>}
+            {results&&(
+              <div>
+                {overBudget&&<div style={{ background:"#fde8e8", border:"1px solid #f5c0c0", borderRadius:12, padding:16, marginBottom:16, display:"flex", alignItems:"center", gap:10 }}><span style={{ fontSize:24 }}>⚠️</span><div><p style={{ fontWeight:700, color:"#c0392b", margin:"0 0 2px" }}>Over budget by ${(weekSpend-budget).toFixed(2)} CAD</p><p style={{ fontSize:13, color:"#c0392b", margin:0 }}>Consider removing items or using multi-store option.</p></div></div>}
+                <p className="section-label">Top 3 Shopping Strategies</p>
+                <p style={{ fontSize:12, color:"#aaa", marginBottom:12 }}>⚠️ Addresses and hours are AI estimates — please verify before visiting.</p>
+                {results.combinations&&results.combinations.map((combo,i)=>(
+                  <div key={i} className="card" style={{ marginBottom:14, overflow:"hidden", border:i===0?"2px solid #3d8c23":"1px solid #e2dbd0" }}>
+                    <div style={{ padding:"14px 16px", background:i===0?"#e8f5e0":i===1?"#fef9f0":"#f7f4ef", display:"flex", justifyContent:"space-between", alignItems:"flex-start", borderBottom:"1px solid #f0ebe0" }}>
+                      <div>
+                        <div style={{ fontSize:15, fontWeight:700, color:i===0?"#2d5a1b":"#1a1a1a" }}>{i===0?"🥇 ":i===1?"🥈 ":"🥉 "}{combo.label}</div>
+                        <div style={{ fontSize:12, color:"#7a7060", marginTop:3 }}>{combo.trips} trip{combo.trips!==1?"s":""}</div>
+                        {combo.tip&&<div style={{ fontSize:12, color:"#7a7060", fontStyle:"italic", marginTop:3 }}>💡 {combo.tip}</div>}
+                      </div>
+                      <div style={{ textAlign:"right", flexShrink:0, marginLeft:12 }}>
+                        <div style={{ fontSize:22, fontWeight:700, color:i===0?"#2d5a1b":"#1a1a1a" }}>${combo.totalCAD?.toFixed(2)} <span style={{ fontSize:11, fontWeight:400, color:"#aaa" }}>CAD</span></div>
+                        {combo.savingsVsWorst>0&&<div style={{ fontSize:12, color:"#3d8c23", fontWeight:600 }}>Save ${combo.savingsVsWorst.toFixed(2)}</div>}
+                      </div>
+                    </div>
+                    {/* Store details with address, distance, hours */}
+                    {combo.stores&&combo.stores.map((store,j)=>{
+                      const storeObj = typeof store === "object" ? store : { name: store };
+                      return (
+                        <div key={j} style={{ padding:"12px 16px", borderBottom:"1px solid #f5f0e8", background:"#fafafa" }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                            <div>
+                              <p style={{ fontSize:14, fontWeight:700, color:"#1a1a1a", margin:"0 0 2px" }}>🏪 {storeObj.name}</p>
+                              {storeObj.address&&<p style={{ fontSize:12, color:"#7a7060", margin:"0 0 2px" }}>📍 {storeObj.address}</p>}
+                              {storeObj.hours&&<p style={{ fontSize:12, color:"#7a7060", margin:0 }}>🕐 {storeObj.hours}</p>}
+                            </div>
+                            {storeObj.distanceKm&&<span style={{ fontSize:12, fontWeight:600, color:"#3d8c23", background:"#e8f5e0", padding:"3px 8px", borderRadius:99, flexShrink:0, marginLeft:8 }}>{storeObj.distanceKm} km</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {combo.breakdown&&combo.breakdown.map((b,j)=>(
+                      <div key={j} style={{ padding:"10px 16px", borderBottom:"1px solid #f5f0e8" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, fontWeight:600, marginBottom:4 }}><span>{b.store}</span><span style={{ color:"#3d8c23" }}>${b.subtotal?.toFixed(2)}</span></div>
+                        <div style={{ fontSize:12, color:"#7a7060" }}>{b.items?.join(", ")}</div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+                {results.perItemPrices?.length>0&&(
+                  <div className="card" style={{ overflow:"hidden" }}>
+                    <div style={{ padding:"12px 16px", borderBottom:"1px solid #f0ebe0", background:"#f7f4ef" }}><p className="section-label" style={{ margin:0 }}>Price per Item</p></div>
+                    {results.perItemPrices.map((p,i)=>(
+                      <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"10px 16px", borderBottom:"1px solid #f5f0e8", fontSize:14 }}>
+                        <span style={{ color:"#444" }}>{p.name}</span>
+                        <span style={{ color:"#3d8c23", fontWeight:600 }}>${p.price?.toFixed(2)} <span style={{ color:"#aaa", fontWeight:400, fontSize:12 }}>@ {p.store}</span></span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* HISTORY TAB */}
+        {tab==="history"&&(
+          <div>
+            {history.length===0?(
+              <div style={{ textAlign:"center", padding:"48px 24px", color:"#bbb" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>📈</div>
+                <p style={{ fontStyle:"italic", fontSize:15 }}>No history yet. After comparing prices, tap Save Week.</p>
+              </div>
+            ):(
+              <div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+                  <div className="card" style={{ padding:16, textAlign:"center" }}><p style={{ fontSize:12, color:"#7a7060", margin:"0 0 4px" }}>Avg Weekly Spend</p><p style={{ fontSize:24, fontFamily:"'DM Serif Display',serif", color:"#2d5a1b", margin:0 }}>${avgSpend}</p><p style={{ fontSize:11, color:"#aaa", margin:"2px 0 0" }}>CAD</p></div>
+                  <div className="card" style={{ padding:16, textAlign:"center" }}><p style={{ fontSize:12, color:"#7a7060", margin:"0 0 4px" }}>Weeks Tracked</p><p style={{ fontSize:24, fontFamily:"'DM Serif Display',serif", color:"#2d5a1b", margin:0 }}>{history.length}</p><p style={{ fontSize:11, color:"#aaa", margin:"2px 0 0" }}>of 12 max</p></div>
+                </div>
+                {history.length>=2&&(
+                  <div className="card" style={{ padding:16, marginBottom:16 }}>
+                    <p className="section-label">Spending Trend</p>
+                    <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"space-between", gap:16 }}>
+                      <Sparkline weeks={[...history].reverse()}/>
+                      <div style={{ fontSize:12, color:"#7a7060", textAlign:"right" }}>
+                        <div>Budget: <strong style={{ color:"#2d5a1b" }}>${budget}/wk</strong></div>
+                        <div style={{ marginTop:4 }}>Last week: <strong>${history[0]?.spent?.toFixed(2)}</strong></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <p className="section-label">Weekly Log</p>
+                {history.map((w,i)=>{
+                  const over=w.spent>w.budget;
+                  return (
+                    <div key={i} className="card" style={{ marginBottom:10, padding:16, display:"flex", justifyContent:"space-between", alignItems:"center", borderLeft:"4px solid "+(over?"#c0392b":"#3d8c23") }}>
+                      <div>
+                        <p style={{ fontWeight:600, margin:"0 0 3px", fontSize:15 }}>{w.date}</p>
+                        <p style={{ fontSize:12, color:"#7a7060", margin:0 }}>{w.store}</p>
+                        {w.items?.length>0&&<p style={{ fontSize:11, color:"#aaa", margin:"3px 0 0" }}>{w.items.slice(0,4).join(", ")}{w.items.length>4?" +"+(w.items.length-4)+" more":""}</p>}
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <p style={{ fontWeight:700, fontSize:18, color:over?"#c0392b":"#2d5a1b", margin:0 }}>${w.spent?.toFixed(2)}</p>
+                        <p style={{ fontSize:11, color:"#aaa", margin:0 }}>of ${w.budget} budget</p>
+                        {over&&<p style={{ fontSize:11, color:"#c0392b", margin:0, fontWeight:600 }}>+${(w.spent-w.budget).toFixed(2)} over</p>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+function DishCard({ dish, onClick }) {
+  const meta = MEAL_CATEGORY_META[dish.mealCategory] || { icon:"🍽️", color:"#666", bg:"#f0f0f0" };
+  return (
+    <div className="dish-card" onClick={onClick} style={{ marginBottom:12 }}>
+      <div style={{ display:"flex", alignItems:"center" }}>
+        <div style={{ width:80, height:80, display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)", flexShrink:0 }}>{dish.emoji}</div>
+        <div style={{ padding:"12px 16px", flex:1, minWidth:0 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+            <h3 style={{ fontSize:15, fontWeight:600, color:"#1a1a1a", margin:0 }}>{dish.name}</h3>
+            <span style={{ fontSize:11, fontWeight:600, color:DIFFICULTY_COLOR[dish.difficulty]||"#666", flexShrink:0, marginLeft:8 }}>{dish.difficulty}</span>
+          </div>
+          <p style={{ fontSize:12, color:"#7a7060", margin:"3px 0 6px", lineHeight:1.4 }}>{dish.description}</p>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", fontSize:11, color:"#aaa" }}>
+            <span>⏱ {dish.totalTime||dish.cookTime}</span>
+            <span>👥 {dish.servings}</span>
+            {dish.costPerPersonCAD&&<span style={{ background:"#e8f5e0", color:"#2d5a1b", padding:"1px 7px", borderRadius:99, fontWeight:600 }}>${dish.costPerPersonCAD?.toFixed(2)}/person</span>}
+            <span style={{ background:meta.bg, color:meta.color, padding:"1px 7px", borderRadius:99, fontWeight:600 }}>{meta.icon} {dish.mealCategory}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
