@@ -19,17 +19,19 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "llama-3.1-8b-instant",
-        max_tokens: 2048,
+        max_tokens: 4096,
         temperature: 0.7,
         messages: [
-          { role: "system", content: system || "You are a helpful grocery pricing assistant." },
+          { role: "system", content: system || "You are a helpful assistant." },
           { role: "user", content: prompt }
         ]
       }),
     });
 
     const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content ?? "";
+    const raw = data?.choices?.[0]?.message?.content ?? "";
+    // Clean up escaped newlines and extra whitespace
+    const text = raw.replace(/\\n/g, " ").replace(/\n/g, " ").trim();
     return res.status(200).json({ text });
 
   } catch (err) {
