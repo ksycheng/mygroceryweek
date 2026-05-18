@@ -206,9 +206,11 @@ export default function App() {
   };
 
   const loadHousehold = async (userId) => {
-    const { data: owned } = await supabase.from("households").select("*").eq("owner_id", userId).single();
+    const { data: ownedRows } = await supabase.from("households").select("*").eq("owner_id", userId).limit(1);
+    const owned = ownedRows?.[0];
     if (owned) { setHousehold(owned); loadHouseholdMembers(owned.id); subscribeToList(owned.id); return; }
-    const { data: membership } = await supabase.from("household_members").select("*, households(*)").eq("user_id", userId).single();
+    const { data: memberRows } = await supabase.from("household_members").select("*, households(*)").eq("user_id", userId).limit(1);
+    const membership = memberRows?.[0];
     if (membership?.households) { setHousehold(membership.households); loadHouseholdMembers(membership.households.id); subscribeToList(membership.households.id); }
   };
 
@@ -373,7 +375,7 @@ export default function App() {
           const parsed = data.result;
           newResults[item.id] = parsed;
           // Mark as "on sale" if: AI says it's on sale, OR current price found AND below target price
-          const hasPrice = parsed.currentPrice > 0;
+          const hasPrice = parsed.currentPrice !== null && parsed.currentPrice > 0;
           const belowTarget = item.target_price && hasPrice && parsed.currentPrice <= item.target_price;
           const isOnSale = (parsed.onSale && hasPrice) || belowTarget;
           await supabase.from("wishlist").update({ current_price: parsed.currentPrice, on_sale: isOnSale, last_checked: new Date().toISOString() }).eq("id", item.id);
@@ -447,7 +449,7 @@ export default function App() {
         const parsed = JSON.parse(match[0]);
         if (Array.isArray(parsed)) setSuggestions(parsed);
       }
-    } catch (e) { console.error("suggestGroceries:", e.message); }
+    } catch (e) { console.error("suggestGroceries:", e.message); setError("Could not get suggestions. Please try again."); }
     finally { setAiLoading(false); }
   };
 
