@@ -95,7 +95,7 @@ export default async function handler(req, res) {
 
       // Build store groups from cheapest prices
       const storeInfo = {}; // store name -> { address, hours }
-      perItemPrices.forEach(p => {
+      allPrices.forEach(p => {
         if (p.store && !storeInfo[p.store]) {
           storeInfo[p.store] = { address: p.address || (city + ", ON"), hours: p.hours || null };
         }
@@ -226,7 +226,7 @@ export default async function handler(req, res) {
       });
 
       const storeInfoP = {};
-      perItemPricesP.forEach(p => {
+      allPricesP.forEach(p => {
         if (p.store && !storeInfoP[p.store]) storeInfoP[p.store] = { address: p.address || (city + ", ON"), hours: p.hours || null };
       });
 
