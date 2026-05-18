@@ -59,43 +59,38 @@ export default async function handler(req, res) {
       const { itemSnippets, storeSnippets, city, cleanedItems } = searchResults;
       const budgetAmt = budget || 200;
 
-      // Batch items 4 at a time so each AI call fits within free tier token limits
+      // Batch 4 items at a time — keeps each AI call small enough for free tier limits
       const BATCH = 4;
-      const allPrices = {};
+      const allPrices = []; // collect ALL price entries across all batches
       for (let i = 0; i < cleanedItems.length; i += BATCH) {
         const batchItems = cleanedItems.slice(i, i + BATCH);
-        const batchSnippets = {};
-        batchItems.forEach(item => { batchSnippets[item] = itemSnippets[item] || ""; });
-        const priceContext = Object.entries(batchSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
-        console.log("Analyzing batch:", batchItems.join(", "));
-        const aiResponse = await callAI(
-          "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
-          buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
-          groqKey, geminiKey, 2048
-        );
-        if (aiResponse) {
-          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-          const match = clean.match(/\{[\s\S]*\}/);
-          if (match) {
-            try {
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
+        console.log("Analyzing batch " + (i/BATCH+1) + ":", batchItems.join(", "));
+        try {
+          const aiResponse = await callAI(
+            "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+            buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+            groqKey, geminiKey, 2048
+          );
+          if (aiResponse) {
+            const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+            const match = clean.match(/\{[\s\S]*\}/);
+            if (match) {
               const parsed = JSON.parse(match[0]);
-              (parsed.perItemPrices || []).forEach(p => { allPrices[p.name] = p; });
-            } catch(e) { console.error("Parse error batch", i, e.message); }
+              (parsed.perItemPrices || []).forEach(p => {
+                if (p.name && p.store && p.price && p.price > 0) allPrices.push(p);
+              });
+            }
           }
-        }
+        } catch(e) { console.error("Batch " + i + " error:", e.message); }
       }
 
-      // Build final combined result from all batch prices
-      const perItemPrices = Object.values(allPrices);
-
-      // For each item, find cheapest price across all stores found
-      const itemNames = [...new Set(perItemPrices.map(p => p.name))];
+      // For each item pick the cheapest price found across all stores
+      const itemNames = [...new Set(allPrices.map(p => p.name))];
       const cheapestPerItem = {};
       itemNames.forEach(name => {
-        const options = perItemPrices.filter(p => p.name === name && p.price && p.price > 0);
-        if (options.length > 0) {
-          cheapestPerItem[name] = options.reduce((best, p) => p.price < best.price ? p : best);
-        }
+        const options = allPrices.filter(p => p.name === name);
+        if (options.length > 0) cheapestPerItem[name] = options.reduce((best, p) => p.price < best.price ? p : best);
       });
 
       // Build store groups from cheapest prices
@@ -198,37 +193,35 @@ export default async function handler(req, res) {
       const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
-      // Batch items 4 at a time to stay within free tier token limits
+      // Batch 4 items at a time — keeps each AI call small enough for free tier limits
       const BATCH_P = 4;
-      const allPricesP = {};
+      const allPricesP = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH_P) {
         const batchItems = cleanedItems.slice(i, i + BATCH_P);
-        const batchSnippets = {};
-        batchItems.forEach(item => { batchSnippets[item] = itemSnippets[item] || ""; });
-        const priceContext = Object.entries(batchSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
-        const aiResponse = await callAI(
-          "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
-          buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
-          groqKey, geminiKey, 2048
-        );
-        if (aiResponse) {
-          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-          const match = clean.match(/\{[\s\S]*\}/);
-          if (match) {
-            try {
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
+        try {
+          const aiResponse = await callAI(
+            "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+            buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+            groqKey, geminiKey, 2048
+          );
+          if (aiResponse) {
+            const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+            const match = clean.match(/\{[\s\S]*\}/);
+            if (match) {
               const parsed = JSON.parse(match[0]);
-              (parsed.perItemPrices || []).forEach(p => { allPricesP[p.name] = p; });
-            } catch(e) { console.error("Parse error batch", i, e.message); }
+              (parsed.perItemPrices || []).forEach(p => {
+                if (p.name && p.store && p.price && p.price > 0) allPricesP.push(p);
+              });
+            }
           }
-        }
+        } catch(e) { console.error("Prices batch " + i + " error:", e.message); }
       }
 
-      const perItemPricesP = Object.values(allPricesP);
-
-      const itemNamesP = [...new Set(perItemPricesP.map(p => p.name))];
+      const itemNamesP = [...new Set(allPricesP.map(p => p.name))];
       const cheapestPerItemP = {};
       itemNamesP.forEach(name => {
-        const options = perItemPricesP.filter(p => p.name === name && p.price && p.price > 0);
+        const options = allPricesP.filter(p => p.name === name);
         if (options.length > 0) cheapestPerItemP[name] = options.reduce((best, p) => p.price < best.price ? p : best);
       });
 
@@ -326,27 +319,19 @@ export default async function handler(req, res) {
 }
 
 function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "LIVE WEB SEARCH RESULTS PER ITEM:\n" +
-    priceContext + "\n\nSTORE LOCATION SEARCH RESULTS:\n" + storeSnippets +
-    "\n\nITEMS NEEDED: " + cleanedItems.join(", ") +
-    "\nCITY: " + city + ", Ontario (postal: " + postal + ")" +
-    "\nBUDGET: $" + budgetAmt + " CAD" +
-    "\n\nCRITICAL RULES - YOU MUST FOLLOW THESE:\n" +
-    "1. ONLY use prices explicitly stated in the search snippets above (e.g. '$3.99', '2 for $5', '$1.99/100g')\n" +
-    "2. NEVER guess, estimate, or invent a price. If no price appears in the snippets for an item, set price to null\n" +
-    "3. For each price you use, record which snippet/source it came from in the 'source' field\n" +
-    "4. Only include an item in a store's breakdown if you found a real price for it at that store\n" +
-    "5. Totals must be the sum of only the non-null prices found — never fill in zeros for missing items\n" +
-    "6. If fewer than 2 items have real prices found, return an empty combinations array\n" +
-    "7. Costco prices are bulk — note the pack size (e.g. 'Chicken Breast 2kg - $14.99')\n" +
-    "8. For store addresses use only addresses found in the store location results above\n" +
-    "9. saleItems: only list items where the snippet explicitly mentions 'sale', 'flyer', 'this week', or a crossed-out price\n\n" +
-    'Return ONLY this JSON (price is null if not found in snippets):\n' +
-    '{"combinations":[{"rank":1,"label":"Best single store","stores":[{"name":"Store Name","address":"Full address from search, ' + city + ' ON","hours":"Hours from search or null"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":1,"breakdown":[{"store":"Store","items":["Brand Product Size - $x.xx (source: snippet title)"],"subtotal":0.00}],"tip":"tip"},{"rank":2,"label":"Best two stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":2,"breakdown":[{"store":"A","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00},{"store":"B","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00}],"tip":"tip"},{"rank":3,"label":"Best three stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"},{"name":"C","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":3,"breakdown":[{"store":"A","items":["p"],"subtotal":0.00},{"store":"B","items":["p"],"subtotal":0.00},{"store":"C","items":["p"],"subtotal":0.00}],"tip":"tip"}],' +
-    '"budgetCAD":' + budgetAmt + ',"withinBudget":true,"overBy":0,' +
-    '"perItemPrices":[{"name":"item name","store":"store name or null","price":0.00,"onSale":false,"source":"snippet title it came from","address":"full store address from location snippets or null","hours":"store hours from location snippets or null"}],' +
-    '"saleItems":[],' +
-    '"priceNote":"Prices from live web search. Always verify in-store."}';
+  return "ITEM PRICE SEARCH RESULTS (from walmart.ca, loblaws.ca, nofrills.ca, metro.ca, costco.ca, sobeys.com, flipp.com):\n" +
+    priceContext +
+    "\n\nSTORE LOCATION RESULTS (addresses and hours for stores near " + city + "):\n" + storeSnippets +
+    "\n\nEXTRACT PRICES FOR: " + cleanedItems.join(", ") +
+    "\nCITY: " + city + ", Ontario" +
+    "\n\nRULES:\n" +
+    "- ONLY use prices explicitly written in the snippets above (e.g. $3.99, 2 for $5, $1.99/100g, $x.xx/ea)\n" +
+    "- NEVER guess or invent any price — if not in snippets, set price to null\n" +
+    "- Extract the store address and hours from the STORE LOCATION RESULTS for each store\n" +
+    "- source: the snippet title the price came from\n" +
+    "- onSale: true only if snippet says 'sale', 'flyer', 'this week', or shows a reduced price\n\n" +
+    "Return ONLY a JSON object with this exact structure:\n" +
+    '{"perItemPrices":[{"name":"exact item name","store":"exact store name","price":0.00,"onSale":false,"source":"snippet title","address":"full street address from store location results or null","hours":"opening hours from store location results or null"}]}';
 }
 
 function cleanItemName(item) {
@@ -494,21 +479,15 @@ async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
 
   // For large analyze prompts: Gemini 1.5 Flash first (1M context, 1500 req/day free)
   // For fast/small prompts: Groq first (low latency)
-  const providers = fast
-    ? [
-        { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
-        { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
-        { name: "Mistral",    fn: () => callMistral(system, prompt, maxTokens) },
-        { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
-        { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
-      ]
-    : [
-        { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
-        { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
-        { name: "Mistral",    fn: () => callMistral(system, prompt, maxTokens) },
-        { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
-        { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
-      ];
+  // Mistral first — reliable free tier with no daily quota cap
+  // Groq and Gemini as fast fallbacks, Claude and OpenRouter as last resort
+  const providers = [
+    { name: "Mistral",    fn: () => callMistral(system, prompt, maxTokens) },
+    { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
+    { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
+    { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
+    { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
+  ];
 
   for (const { name, fn } of providers) {
     try {
