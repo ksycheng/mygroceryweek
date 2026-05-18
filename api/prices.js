@@ -60,6 +60,10 @@ export default async function handler(req, res) {
       const budgetAmt = budget || 200;
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
+      // DEBUG: log snippets to verify search quality
+      const firstKey = cleanedItems[0];
+      console.log("SNIPPET_DEBUG[" + firstKey + "]:", (itemSnippets[firstKey] || "EMPTY").substring(0, 800));
+
       const aiResponse = await callAI(
         "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON with no markdown.",
         buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt),
@@ -102,6 +106,11 @@ export default async function handler(req, res) {
       });
       const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
+
+      // DEBUG: log snippets to verify search quality
+      const firstKeyP = cleanedItems[0];
+      console.log("PRICES_SNIPPET_DEBUG[" + firstKeyP + "]:", (itemSnippets[firstKeyP] || "EMPTY").substring(0, 800));
+      console.log("STORE_SNIPPET_DEBUG:", storeSnippets.substring(0, 400));
 
       const aiResponse = await callAI(
         "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON.",
@@ -300,6 +309,25 @@ async function callOpenRouter(system, prompt, maxTokens) {
   } catch (e) { return null; }
 }
 
+async function callMistral(system, prompt, maxTokens) {
+  const apiKey = process.env.MISTRAL_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const r = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+      body: JSON.stringify({
+        model: "mistral-small-latest",
+        max_tokens: maxTokens, temperature: 0.1,
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
+      }),
+    });
+    const data = await r.json();
+    if (data.error) { console.error("Mistral:", data.error.message); return null; }
+    return data?.choices?.[0]?.message?.content ?? null;
+  } catch (e) { return null; }
+}
+
 async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
   maxTokens = maxTokens || 2048;
   fast = fast || false;
@@ -311,12 +339,14 @@ async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
     ? [
         { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
         { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
+        { name: "Mistral",    fn: () => callMistral(system, prompt, maxTokens) },
         { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
         { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
       ]
     : [
         { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
         { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
+        { name: "Mistral",    fn: () => callMistral(system, prompt, maxTokens) },
         { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
         { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
       ];
