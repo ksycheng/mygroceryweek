@@ -538,7 +538,7 @@ async function callMistral(system, prompt, maxTokens) {
   if (!apiKey) return null;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout
+    const timeout = setTimeout(() => controller.abort(), 3000);
     const r = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: "POST",
       signal: controller.signal,
@@ -552,11 +552,10 @@ async function callMistral(system, prompt, maxTokens) {
     clearTimeout(timeout);
     const data = await r.json();
     if (data.error) { console.error("Mistral error:", JSON.stringify(data.error)); return null; }
-    const text = data?.choices?.[0]?.message?.content ?? null;
-    if (!text) { console.error("Mistral empty response:", JSON.stringify(data)); }
-    return text;
+    return data?.choices?.[0]?.message?.content ?? null;
   } catch (e) { console.error("Mistral timeout/error:", e.message); return null; }
 }
+
 
 async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
   maxTokens = maxTokens || 2048;
