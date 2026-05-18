@@ -136,16 +136,73 @@ export default async function handler(req, res) {
         };
       };
 
-      const combinations = [];
-      if (allStoreNames.length >= 1) combinations.push(buildCombo([allStoreNames[0]], 1, "Best single store"));
-      if (allStoreNames.length >= 2) combinations.push(buildCombo([allStoreNames[0], allStoreNames[1]], 2, "Best two stores"));
-      if (allStoreNames.length >= 3) combinations.push(buildCombo([allStoreNames[0], allStoreNames[1], allStoreNames[2]], 3, "Best three stores"));
+      // Build optimal multi-store combos by splitting items to minimize total cost
+      // For each additional store, only include items cheaper there than at previous stores
+      const buildOptimalCombos = () => {
+        const results = [];
+        const storeList = sortedStores.map(([s, items]) => ({ store: s, items }));
+        if (storeList.length === 0) return results;
 
-      // Calculate savings vs worst combo
-      if (combinations.length > 1) {
-        const worst = Math.max(...combinations.map(c => c.totalCAD));
-        combinations.forEach(c => { c.savingsVsWorst = +(worst - c.totalCAD).toFixed(2); });
-      }
+        // Strategy 1: best single store (store with most cheapest items)
+        const s1 = storeList[0];
+        const combo1 = buildCombo([s1.store], 1, "Best single store");
+        results.push(combo1);
+
+        // Strategy 2: find if any 2-store split is cheaper than 1 store
+        if (storeList.length >= 2) {
+          // Items not at store 1 that are cheapest at store 2
+          const s2items = storeList[1].items;
+          if (s2items.length > 0) {
+            const combo2total = combo1.totalCAD + s2items.reduce((s, p) => s + p.price, 0);
+            // Only show if it covers more items (not necessarily cheaper since store 1 already has cheapest)
+            const combo2 = {
+              rank: 2, label: "Best two stores",
+              stores: [
+                { name: s1.store, address: (storeInfo[s1.store] || {}).address || (city + ", ON"), hours: (storeInfo[s1.store] || {}).hours || null },
+                { name: storeList[1].store, address: (storeInfo[storeList[1].store] || {}).address || (city + ", ON"), hours: (storeInfo[storeList[1].store] || {}).hours || null }
+              ],
+              totalCAD: +combo2total.toFixed(2),
+              savingsVsWorst: 0, trips: 2,
+              breakdown: [
+                { store: s1.store, items: s1.items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s1.items.reduce((s,p)=>s+p.price,0).toFixed(2) },
+                { store: storeList[1].store, items: s2items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s2items.reduce((s,p)=>s+p.price,0).toFixed(2) }
+              ],
+              tip: "Split your shop to cover items cheapest at each store."
+            };
+            results.push(combo2);
+          }
+        }
+
+        // Strategy 3: add a third store for remaining items
+        if (storeList.length >= 3) {
+          const s3items = storeList[2].items;
+          if (s3items.length > 0 && results.length >= 2) {
+            const combo3total = results[1].totalCAD + s3items.reduce((s, p) => s + p.price, 0);
+            const combo3 = {
+              rank: 3, label: "Best three stores",
+              stores: [
+                ...results[1].stores,
+                { name: storeList[2].store, address: (storeInfo[storeList[2].store] || {}).address || (city + ", ON"), hours: (storeInfo[storeList[2].store] || {}).hours || null }
+              ],
+              totalCAD: +combo3total.toFixed(2),
+              savingsVsWorst: 0, trips: 3,
+              breakdown: [
+                ...results[1].breakdown,
+                { store: storeList[2].store, items: s3items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s3items.reduce((s,p)=>s+p.price,0).toFixed(2) }
+              ],
+              tip: "Maximum savings by visiting three stores."
+            };
+            results.push(combo3);
+          }
+        }
+
+        // Calculate savings vs worst (single store) for each combo
+        const worst = results[results.length - 1]?.totalCAD || results[0].totalCAD;
+        results.forEach(c => { c.savingsVsWorst = +(Math.abs(worst - c.totalCAD)).toFixed(2); });
+        return results;
+      };
+
+      const combinations = buildOptimalCombos();
 
       const validPrices = Object.values(cheapestPerItem);
       const totalCAD = validPrices.reduce((s, p) => s + p.price, 0);
@@ -254,12 +311,40 @@ export default async function handler(req, res) {
       };
 
       const combinationsP = [];
-      if (allStoreNamesP.length >= 1) combinationsP.push(buildComboP([allStoreNamesP[0]], 1, "Best single store"));
-      if (allStoreNamesP.length >= 2) combinationsP.push(buildComboP([allStoreNamesP[0], allStoreNamesP[1]], 2, "Best two stores"));
-      if (allStoreNamesP.length >= 3) combinationsP.push(buildComboP([allStoreNamesP[0], allStoreNamesP[1], allStoreNamesP[2]], 3, "Best three stores"));
-      if (combinationsP.length > 1) {
-        const worst = Math.max(...combinationsP.map(c => c.totalCAD));
-        combinationsP.forEach(c => { c.savingsVsWorst = +(worst - c.totalCAD).toFixed(2); });
+      if (sortedStoresP.length >= 1) {
+        const s1P = sortedStoresP[0];
+        combinationsP.push(buildComboP([s1P[0]], 1, "Best single store"));
+        if (sortedStoresP.length >= 2 && sortedStoresP[1][1].length > 0) {
+          const s2P = sortedStoresP[1];
+          const c2 = {
+            rank: 2, label: "Best two stores",
+            stores: [
+              { name: s1P[0], address: (storeInfoP[s1P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s1P[0]]||{}).hours||null },
+              { name: s2P[0], address: (storeInfoP[s2P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s2P[0]]||{}).hours||null }
+            ],
+            totalCAD: +([...s1P[1],...s2P[1]].reduce((s,p)=>s+p.price,0)).toFixed(2),
+            savingsVsWorst: 0, trips: 2,
+            breakdown: [
+              { store: s1P[0], items: s1P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s1P[1].reduce((s,p)=>s+p.price,0).toFixed(2) },
+              { store: s2P[0], items: s2P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s2P[1].reduce((s,p)=>s+p.price,0).toFixed(2) }
+            ],
+            tip: "Split your shop to cover items cheapest at each store."
+          };
+          combinationsP.push(c2);
+          if (sortedStoresP.length >= 3 && sortedStoresP[2][1].length > 0) {
+            const s3P = sortedStoresP[2];
+            combinationsP.push({
+              rank: 3, label: "Best three stores",
+              stores: [...c2.stores, { name: s3P[0], address: (storeInfoP[s3P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s3P[0]]||{}).hours||null }],
+              totalCAD: +(c2.totalCAD + s3P[1].reduce((s,p)=>s+p.price,0)).toFixed(2),
+              savingsVsWorst: 0, trips: 3,
+              breakdown: [...c2.breakdown, { store: s3P[0], items: s3P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s3P[1].reduce((s,p)=>s+p.price,0).toFixed(2) }],
+              tip: "Maximum item coverage across three stores."
+            });
+          }
+        }
+        const worst = combinationsP[combinationsP.length-1]?.totalCAD || combinationsP[0].totalCAD;
+        combinationsP.forEach(c => { c.savingsVsWorst = +Math.abs(worst - c.totalCAD).toFixed(2); });
       }
 
       const validPricesP = Object.values(cheapestPerItemP);
@@ -319,19 +404,14 @@ export default async function handler(req, res) {
 }
 
 function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "ITEM PRICE SEARCH RESULTS (from walmart.ca, loblaws.ca, nofrills.ca, metro.ca, costco.ca, sobeys.com, flipp.com):\n" +
-    priceContext +
-    "\n\nSTORE LOCATION RESULTS (addresses and hours for stores near " + city + "):\n" + storeSnippets +
-    "\n\nEXTRACT PRICES FOR: " + cleanedItems.join(", ") +
-    "\nCITY: " + city + ", Ontario" +
-    "\n\nRULES:\n" +
-    "- ONLY use prices explicitly written in the snippets above (e.g. $3.99, 2 for $5, $1.99/100g, $x.xx/ea)\n" +
-    "- NEVER guess or invent any price — if not in snippets, set price to null\n" +
-    "- Extract the store address and hours from the STORE LOCATION RESULTS for each store\n" +
-    "- source: the snippet title the price came from\n" +
-    "- onSale: true only if snippet says 'sale', 'flyer', 'this week', or shows a reduced price\n\n" +
-    "Return ONLY a JSON object with this exact structure:\n" +
-    '{"perItemPrices":[{"name":"exact item name","store":"exact store name","price":0.00,"onSale":false,"source":"snippet title","address":"full street address from store location results or null","hours":"opening hours from store location results or null"}]}';
+  return "PRICE SEARCH RESULTS:\n" + priceContext +
+    "\n\nSTORE LOCATIONS NEAR " + city + ":\n" + storeSnippets +
+    "\n\nFind prices for: " + cleanedItems.join(", ") +
+    "\n\nRules: Only use prices explicitly in snippets. Never guess. Set price to null if not found." +
+    "\nFor address/hours use the store location results above." +
+    "\nonSale=true only if snippet says sale/flyer/this week." +
+    "\n\nReturn ONLY this JSON (keep source under 60 chars):\n" +
+    '{"perItemPrices":[{"name":"item","store":"store","price":0.00,"onSale":false,"source":"short source","address":"address or null","hours":"hours or null"}]}';
 }
 
 function cleanItemName(item) {
