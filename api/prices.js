@@ -58,22 +58,113 @@ export default async function handler(req, res) {
     try {
       const { itemSnippets, storeSnippets, city, cleanedItems } = searchResults;
       const budgetAmt = budget || 200;
-      const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
-      // DEBUG: log snippets to verify search quality
-      const firstKey = cleanedItems[0];
-      console.log("SNIPPET_DEBUG[" + firstKey + "]:", (itemSnippets[firstKey] || "EMPTY").substring(0, 800));
+      // Batch items 4 at a time so each AI call fits within free tier token limits
+      const BATCH = 4;
+      const allPrices = {};
+      for (let i = 0; i < cleanedItems.length; i += BATCH) {
+        const batchItems = cleanedItems.slice(i, i + BATCH);
+        const batchSnippets = {};
+        batchItems.forEach(item => { batchSnippets[item] = itemSnippets[item] || ""; });
+        const priceContext = Object.entries(batchSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
+        console.log("Analyzing batch:", batchItems.join(", "));
+        const aiResponse = await callAI(
+          "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+          buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+          groqKey, geminiKey, 2048
+        );
+        if (aiResponse) {
+          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          const match = clean.match(/\{[\s\S]*\}/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[0]);
+              (parsed.perItemPrices || []).forEach(p => { allPrices[p.name] = p; });
+            } catch(e) { console.error("Parse error batch", i, e.message); }
+          }
+        }
+      }
 
-      const aiResponse = await callAI(
-        "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON with no markdown.",
-        buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt),
-        groqKey, geminiKey, 4096
-      );
+      // Build final combined result from all batch prices
+      const perItemPrices = Object.values(allPrices);
 
-      const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-      const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) return res.status(500).json({ error: "Could not parse AI response" });
-      return res.status(200).json({ text: match[0] });
+      // For each item, find cheapest price across all stores found
+      const itemNames = [...new Set(perItemPrices.map(p => p.name))];
+      const cheapestPerItem = {};
+      itemNames.forEach(name => {
+        const options = perItemPrices.filter(p => p.name === name && p.price && p.price > 0);
+        if (options.length > 0) {
+          cheapestPerItem[name] = options.reduce((best, p) => p.price < best.price ? p : best);
+        }
+      });
+
+      // Build store groups from cheapest prices
+      const storeInfo = {}; // store name -> { address, hours }
+      perItemPrices.forEach(p => {
+        if (p.store && !storeInfo[p.store]) {
+          storeInfo[p.store] = { address: p.address || (city + ", ON"), hours: p.hours || null };
+        }
+      });
+
+      // Group cheapest items by store
+      const storeGroups = {};
+      Object.values(cheapestPerItem).forEach(p => {
+        if (!storeGroups[p.store]) storeGroups[p.store] = [];
+        storeGroups[p.store].push(p);
+      });
+
+      // Sort stores by number of cheapest items (most items = best single-store)
+      const sortedStores = Object.entries(storeGroups).sort((a, b) => b[1].length - a[1].length);
+      const allStoreNames = sortedStores.map(([s]) => s);
+
+      // Strategy 1: Best single store (most items cheapest there)
+      // Strategy 2: Best two stores (cheapest combo of 2)
+      // Strategy 3: Best three stores (cheapest combo of 3)
+      const buildCombo = (storeNames, rank, label) => {
+        const breakdown = storeNames.map(store => {
+          const items = (storeGroups[store] || []);
+          return {
+            store,
+            items: items.map(p => p.name + " - $" + p.price.toFixed(2) + (p.source ? " (source: " + p.source + ")" : "")),
+            subtotal: +items.reduce((s, p) => s + p.price, 0).toFixed(2)
+          };
+        });
+        const total = +breakdown.reduce((s, b) => s + b.subtotal, 0).toFixed(2);
+        return {
+          rank, label,
+          stores: storeNames.map(s => ({ name: s, address: (storeInfo[s] || {}).address || (city + ", ON"), hours: (storeInfo[s] || {}).hours || null })),
+          totalCAD: total,
+          savingsVsWorst: 0,
+          trips: storeNames.length,
+          breakdown,
+          tip: "Prices from live web search. Always verify in-store before shopping."
+        };
+      };
+
+      const combinations = [];
+      if (allStoreNames.length >= 1) combinations.push(buildCombo([allStoreNames[0]], 1, "Best single store"));
+      if (allStoreNames.length >= 2) combinations.push(buildCombo([allStoreNames[0], allStoreNames[1]], 2, "Best two stores"));
+      if (allStoreNames.length >= 3) combinations.push(buildCombo([allStoreNames[0], allStoreNames[1], allStoreNames[2]], 3, "Best three stores"));
+
+      // Calculate savings vs worst combo
+      if (combinations.length > 1) {
+        const worst = Math.max(...combinations.map(c => c.totalCAD));
+        combinations.forEach(c => { c.savingsVsWorst = +(worst - c.totalCAD).toFixed(2); });
+      }
+
+      const validPrices = Object.values(cheapestPerItem);
+      const totalCAD = validPrices.reduce((s, p) => s + p.price, 0);
+
+      const result = {
+        combinations,
+        budgetCAD: budgetAmt,
+        withinBudget: totalCAD <= budgetAmt,
+        overBy: Math.max(0, +(totalCAD - budgetAmt).toFixed(2)),
+        perItemPrices: Object.values(cheapestPerItem),
+        saleItems: validPrices.filter(p => p.onSale).map(p => p.name),
+        priceNote: "Prices from live web search (Walmart, Loblaws, No Frills, Costco, Metro, Sobeys, FreshCo). Cheapest price per item shown. Always verify in-store."
+      };
+      return res.status(200).json({ text: JSON.stringify(result) });
     } catch (err) {
       console.error("Analyze error:", err.message);
       return res.status(500).json({ error: err.message });
@@ -107,21 +198,89 @@ export default async function handler(req, res) {
       const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
-      // DEBUG: log snippets to verify search quality
-      const firstKeyP = cleanedItems[0];
-      console.log("PRICES_SNIPPET_DEBUG[" + firstKeyP + "]:", (itemSnippets[firstKeyP] || "EMPTY").substring(0, 800));
-      console.log("STORE_SNIPPET_DEBUG:", storeSnippets.substring(0, 400));
+      // Batch items 4 at a time to stay within free tier token limits
+      const BATCH_P = 4;
+      const allPricesP = {};
+      for (let i = 0; i < cleanedItems.length; i += BATCH_P) {
+        const batchItems = cleanedItems.slice(i, i + BATCH_P);
+        const batchSnippets = {};
+        batchItems.forEach(item => { batchSnippets[item] = itemSnippets[item] || ""; });
+        const priceContext = Object.entries(batchSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
+        const aiResponse = await callAI(
+          "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+          buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+          groqKey, geminiKey, 2048
+        );
+        if (aiResponse) {
+          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          const match = clean.match(/\{[\s\S]*\}/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[0]);
+              (parsed.perItemPrices || []).forEach(p => { allPricesP[p.name] = p; });
+            } catch(e) { console.error("Parse error batch", i, e.message); }
+          }
+        }
+      }
 
-      const aiResponse = await callAI(
-        "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON.",
-        buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt),
-        groqKey, geminiKey, 4096
-      );
+      const perItemPricesP = Object.values(allPricesP);
 
-      const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-      const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) return res.status(500).json({ error: "Could not parse response" });
-      return res.status(200).json({ text: match[0] });
+      const itemNamesP = [...new Set(perItemPricesP.map(p => p.name))];
+      const cheapestPerItemP = {};
+      itemNamesP.forEach(name => {
+        const options = perItemPricesP.filter(p => p.name === name && p.price && p.price > 0);
+        if (options.length > 0) cheapestPerItemP[name] = options.reduce((best, p) => p.price < best.price ? p : best);
+      });
+
+      const storeInfoP = {};
+      perItemPricesP.forEach(p => {
+        if (p.store && !storeInfoP[p.store]) storeInfoP[p.store] = { address: p.address || (city + ", ON"), hours: p.hours || null };
+      });
+
+      const storeGroupsP = {};
+      Object.values(cheapestPerItemP).forEach(p => {
+        if (!storeGroupsP[p.store]) storeGroupsP[p.store] = [];
+        storeGroupsP[p.store].push(p);
+      });
+
+      const sortedStoresP = Object.entries(storeGroupsP).sort((a, b) => b[1].length - a[1].length);
+      const allStoreNamesP = sortedStoresP.map(([s]) => s);
+
+      const buildComboP = (storeNames, rank, label) => {
+        const breakdown = storeNames.map(store => {
+          const items = storeGroupsP[store] || [];
+          return { store, items: items.map(p => p.name + " - $" + p.price.toFixed(2) + (p.source ? " (source: " + p.source + ")" : "")), subtotal: +items.reduce((s, p) => s + p.price, 0).toFixed(2) };
+        });
+        return {
+          rank, label,
+          stores: storeNames.map(s => ({ name: s, address: (storeInfoP[s] || {}).address || (city + ", ON"), hours: (storeInfoP[s] || {}).hours || null })),
+          totalCAD: +breakdown.reduce((s, b) => s + b.subtotal, 0).toFixed(2),
+          savingsVsWorst: 0, trips: storeNames.length, breakdown,
+          tip: "Prices from live web search. Always verify in-store before shopping."
+        };
+      };
+
+      const combinationsP = [];
+      if (allStoreNamesP.length >= 1) combinationsP.push(buildComboP([allStoreNamesP[0]], 1, "Best single store"));
+      if (allStoreNamesP.length >= 2) combinationsP.push(buildComboP([allStoreNamesP[0], allStoreNamesP[1]], 2, "Best two stores"));
+      if (allStoreNamesP.length >= 3) combinationsP.push(buildComboP([allStoreNamesP[0], allStoreNamesP[1], allStoreNamesP[2]], 3, "Best three stores"));
+      if (combinationsP.length > 1) {
+        const worst = Math.max(...combinationsP.map(c => c.totalCAD));
+        combinationsP.forEach(c => { c.savingsVsWorst = +(worst - c.totalCAD).toFixed(2); });
+      }
+
+      const validPricesP = Object.values(cheapestPerItemP);
+      const totalCADP = validPricesP.reduce((s, p) => s + p.price, 0);
+
+      const result = {
+        combinations: combinationsP, budgetCAD: budgetAmt,
+        withinBudget: totalCADP <= budgetAmt,
+        overBy: Math.max(0, +(totalCADP - budgetAmt).toFixed(2)),
+        perItemPrices: validPricesP,
+        saleItems: validPricesP.filter(p => p.onSale).map(p => p.name),
+        priceNote: "Prices from live web search (Walmart, Loblaws, No Frills, Costco, Metro, Sobeys, FreshCo). Cheapest price per item shown. Always verify in-store."
+      };
+      return res.status(200).json({ text: JSON.stringify(result) });
     } catch (err) {
       console.error("Prices error:", err.message);
       return res.status(500).json({ error: err.message });
@@ -185,9 +344,9 @@ function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, pos
     'Return ONLY this JSON (price is null if not found in snippets):\n' +
     '{"combinations":[{"rank":1,"label":"Best single store","stores":[{"name":"Store Name","address":"Full address from search, ' + city + ' ON","hours":"Hours from search or null"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":1,"breakdown":[{"store":"Store","items":["Brand Product Size - $x.xx (source: snippet title)"],"subtotal":0.00}],"tip":"tip"},{"rank":2,"label":"Best two stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":2,"breakdown":[{"store":"A","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00},{"store":"B","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00}],"tip":"tip"},{"rank":3,"label":"Best three stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"},{"name":"C","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":3,"breakdown":[{"store":"A","items":["p"],"subtotal":0.00},{"store":"B","items":["p"],"subtotal":0.00},{"store":"C","items":["p"],"subtotal":0.00}],"tip":"tip"}],' +
     '"budgetCAD":' + budgetAmt + ',"withinBudget":true,"overBy":0,' +
-    '"perItemPrices":[{"name":"item name","store":"store name or null","price":0.00,"priceNull":false,"source":"snippet title it came from"}],' +
+    '"perItemPrices":[{"name":"item name","store":"store name or null","price":0.00,"onSale":false,"source":"snippet title it came from","address":"full store address from location snippets or null","hours":"store hours from location snippets or null"}],' +
     '"saleItems":[],' +
-    '"priceNote":"Prices extracted from live Google search results (Walmart, Loblaws, No Frills, Costco, Metro, Sobeys, FreshCo, Food Basics flyers/websites). Items with no price found are marked null. Always verify in-store."}';
+    '"priceNote":"Prices from live web search. Always verify in-store."}';
 }
 
 function cleanItemName(item) {
