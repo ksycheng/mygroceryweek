@@ -230,12 +230,15 @@ function getCity(p) {
 }
 
 async function callGroq(system, prompt, apiKey, maxTokens, fast) {
+  // fast=true (suggestions, dishes): use 8b-instant — low latency, generous TPM
+  // fast=false (price analysis): use 70b-versatile — better reasoning, but only as fallback
+  //   since large prompts may hit the 6k TPM free limit
+  const model = fast ? "llama-3.1-8b-instant" : "llama-3.3-70b-versatile";
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
     body: JSON.stringify({
-      model: fast ? "gemma2-9b-it" : "llama-3.3-70b-versatile",
-      max_tokens: maxTokens, temperature: 0.1,
+      model, max_tokens: maxTokens, temperature: 0.1,
       messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
     }),
   });
@@ -245,7 +248,7 @@ async function callGroq(system, prompt, apiKey, maxTokens, fast) {
 }
 
 async function callGemini(system, prompt, apiKey, maxTokens) {
-  const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey, {
+  const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -289,12 +292,21 @@ async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
   fast = fast || false;
   const claudeKey = process.env.ANTHROPIC_API_KEY;
 
-  const providers = [
-    { name: "Groq",       fn: () => groqKey   ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
-    { name: "Gemini",     fn: () => geminiKey  ? callGemini(system, prompt, geminiKey, maxTokens)   : null },
-    { name: "Claude",     fn: () => claudeKey  ? callClaude(system, prompt, claudeKey, maxTokens)   : null },
-    { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
-  ];
+  // For large analyze prompts: Gemini 1.5 Flash first (1M context, 1500 req/day free)
+  // For fast/small prompts: Groq first (low latency)
+  const providers = fast
+    ? [
+        { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
+        { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
+        { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
+        { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
+      ]
+    : [
+        { name: "Gemini",     fn: () => geminiKey ? callGemini(system, prompt, geminiKey, maxTokens)  : null },
+        { name: "Groq",       fn: () => groqKey  ? callGroq(system, prompt, groqKey, maxTokens, fast) : null },
+        { name: "Claude",     fn: () => claudeKey ? callClaude(system, prompt, claudeKey, maxTokens)  : null },
+        { name: "OpenRouter", fn: () => callOpenRouter(system, prompt, maxTokens) },
+      ];
 
   for (const { name, fn } of providers) {
     try {
