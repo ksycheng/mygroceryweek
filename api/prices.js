@@ -537,21 +537,25 @@ async function callMistral(system, prompt, maxTokens) {
   const apiKey = process.env.MISTRAL_API_KEY;
   if (!apiKey) return null;
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout
     const r = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: "POST",
+      signal: controller.signal,
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
       body: JSON.stringify({
-        model: "mistral-small-2503",
+        model: "open-mistral-nemo",
         max_tokens: maxTokens, temperature: 0.1,
         messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
       }),
     });
+    clearTimeout(timeout);
     const data = await r.json();
     if (data.error) { console.error("Mistral error:", JSON.stringify(data.error)); return null; }
     const text = data?.choices?.[0]?.message?.content ?? null;
     if (!text) { console.error("Mistral empty response:", JSON.stringify(data)); }
     return text;
-  } catch (e) { return null; }
+  } catch (e) { console.error("Mistral timeout/error:", e.message); return null; }
 }
 
 async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
