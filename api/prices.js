@@ -57,7 +57,7 @@ export default async function handler(req, res) {
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
       const aiResponse = await callAI(
-        "You are a Canadian grocery price expert. Extract real prices from web search snippets. Calculate correct totals by summing all item prices. Return ONLY valid JSON with no markdown.",
+        "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON with no markdown.",
         buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt),
         groqKey, geminiKey, 4096
       );
@@ -80,18 +80,14 @@ export default async function handler(req, res) {
       const cleanedItems = [...new Set(itemList.map(cleanItemName))]; // Search ALL items - no cap
       const budgetAmt = budget || 200;
 
+      // 2 searches per item + store search (was 6 per item — too slow for Vercel timeout)
       const [itemResults, storeResults] = await Promise.all([
         Promise.all(cleanedItems.map(item => Promise.all([
-          webSearch('"' + item + '" price Walmart Canada grocery store 2026', serperKey),
-          webSearch('"' + item + '" price Loblaws OR "Real Canadian Superstore" grocery store 2026', serperKey),
-          webSearch('"' + item + '" price "No Frills" OR "Food Basics" OR FreshCo grocery store 2026', serperKey),
-          webSearch('"' + item + '" price Costco Canada grocery 2026', serperKey),
-          webSearch('"' + item + '" price Metro OR Sobeys Canada grocery store 2026', serperKey),
-          webSearch('"' + item + '" weekly flyer sale Ontario Canada grocery this week', serperKey),
+          webSearch('"' + item + '" price Walmart Loblaws "No Frills" "Food Basics" Canada grocery 2026', serperKey),
+          webSearch('"' + item + '" price Costco Metro Sobeys FreshCo Ontario flyer sale 2026', serperKey),
         ]))),
         Promise.all([
-          webSearch('Walmart Loblaws "No Frills" Costco address hours ' + city + ' Ontario', serperKey),
-          webSearch('FreshCo "Food Basics" Metro Sobeys address hours ' + city + ' Ontario', serperKey),
+          webSearch('Walmart Loblaws "No Frills" Costco Metro FreshCo store address hours ' + city + ' Ontario', serperKey),
         ])
       ]);
 
@@ -103,7 +99,7 @@ export default async function handler(req, res) {
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
       const aiResponse = await callAI(
-        "You are a Canadian grocery price expert. Extract real prices from web search snippets. Calculate correct totals. Return ONLY valid JSON.",
+        "You are a Canadian grocery price extractor. Your ONLY job is to read prices that are explicitly stated in the search snippets provided. You MUST NOT guess, estimate, or invent any price. If a price is not clearly stated in the snippets, set price to null. Return ONLY valid JSON.",
         buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt),
         groqKey, geminiKey, 4096
       );
@@ -130,8 +126,8 @@ export default async function handler(req, res) {
       const snippets = results.flat().slice(0, 15).map(r => r.title + ": " + r.snippet).join("\n");
 
       const aiResponse = await callAI(
-        "You extract grocery prices ONLY from web search results. Never invent prices. If no price found in results, set currentPrice to 0 and onSale to false. Return ONLY valid JSON.",
-        'Search results for "' + itemName + '" near ' + city + ', Ontario:\n\n' + snippets + '\n\nExtract ONLY prices explicitly mentioned in the results above. Do NOT guess or invent prices. If no price found, return currentPrice:0 and note:"No price found in search results - check store flyer".\n\nReturn ONLY this JSON: {"currentPrice":0.00,"regularPrice":0.00,"onSale":false,"saleStore":"store name from results or null","address":"address from results or null","hours":"hours from results or null","saleEnds":"date from results or null","savings":0.00,"note":"what was found or not found"}',
+        "You extract grocery prices ONLY from web search results that are explicitly provided to you. NEVER invent, guess, or estimate any price. If no price is clearly stated in the results, set currentPrice to null. Return ONLY valid JSON.",
+        'Search results for "' + itemName + '" near ' + city + ', Ontario:\n\n' + snippets + '\n\nCRITICAL: Extract ONLY prices that are explicitly written in the search results above (e.g. "$3.99", "2 for $5"). NEVER guess or estimate a price. If no price is clearly stated in the results, set currentPrice to null.\n\nReturn ONLY this JSON: {"currentPrice":null,"regularPrice":null,"onSale":false,"saleStore":"store name from results or null","address":"address from results or null","hours":"hours from results or null","saleEnds":"date from results or null","savings":null,"source":"which snippet the price came from, or null","note":"what was found or not found in the search results"}',
         groqKey, geminiKey, 512
       );
       const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
@@ -157,19 +153,27 @@ export default async function handler(req, res) {
 }
 
 function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "SEARCH RESULTS PER ITEM (from walmart.ca, loblaws.ca, nofrills.ca, costco.ca, metro.ca, sobeys.com, freshco, food basics, flyers):\n" +
-    priceContext + "\n\nSTORE LOCATION RESULTS:\n" + storeSnippets +
+  return "LIVE WEB SEARCH RESULTS PER ITEM:\n" +
+    priceContext + "\n\nSTORE LOCATION SEARCH RESULTS:\n" + storeSnippets +
     "\n\nITEMS NEEDED: " + cleanedItems.join(", ") +
     "\nCITY: " + city + ", Ontario (postal: " + postal + ")" +
     "\nBUDGET: $" + budgetAmt + " CAD" +
-    "\n\nINSTRUCTIONS:\n" +
-    "- Read every snippet for price mentions: $x.xx, /ea, /lb, /100g, for $, only $, save, sale\n" +
-    "- Use cheapest real price found for each item across all stores\n" +
-    "- Costco prices are bulk - note pack size (e.g. Chicken Breast 2kg - $14.99 at Costco)\n" +
-    "- For store addresses: extract real addresses from store location results for " + city + "\n" +
-    "- ALL totals MUST be calculated by adding up actual item prices - never leave as 0\n" +
-    "- saleItems: list item names that appear on sale or discounted this week\n\n" +
-    'Return ONLY this JSON:\n{"combinations":[{"rank":1,"label":"Best single store","stores":[{"name":"Store Name","address":"Full address, ' + city + ' ON","distanceKm":2.0,"hours":"Hours from search"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":1,"breakdown":[{"store":"Store","items":["Brand Product Size - $x.xx"],"subtotal":0.00}],"tip":"Shopping tip"},{"rank":2,"label":"Best two stores","stores":[{"name":"A","address":"Addr, ' + city + ' ON","distanceKm":1.5,"hours":"h"},{"name":"B","address":"Addr, ' + city + ' ON","distanceKm":3.0,"hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":2,"breakdown":[{"store":"A","items":["Product - $x.xx"],"subtotal":0.00},{"store":"B","items":["Product - $x.xx"],"subtotal":0.00}],"tip":"tip"},{"rank":3,"label":"Best three stores","stores":[{"name":"A","address":"Addr","distanceKm":1.5,"hours":"h"},{"name":"B","address":"Addr","distanceKm":2.5,"hours":"h"},{"name":"C","address":"Addr","distanceKm":4.0,"hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":3,"breakdown":[{"store":"A","items":["p"],"subtotal":0.00},{"store":"B","items":["p"],"subtotal":0.00},{"store":"C","items":["p"],"subtotal":0.00}],"tip":"tip"}],"budgetCAD":' + budgetAmt + ',"withinBudget":true,"overBy":0,"perItemPrices":[{"name":"Product","store":"store","price":0.00}],"saleItems":[],"priceNote":"Prices from live web search of Walmart, Loblaws, No Frills, Costco, Metro, Sobeys, FreshCo, Food Basics. Verify in-store."}';
+    "\n\nCRITICAL RULES - YOU MUST FOLLOW THESE:\n" +
+    "1. ONLY use prices explicitly stated in the search snippets above (e.g. '$3.99', '2 for $5', '$1.99/100g')\n" +
+    "2. NEVER guess, estimate, or invent a price. If no price appears in the snippets for an item, set price to null\n" +
+    "3. For each price you use, record which snippet/source it came from in the 'source' field\n" +
+    "4. Only include an item in a store's breakdown if you found a real price for it at that store\n" +
+    "5. Totals must be the sum of only the non-null prices found — never fill in zeros for missing items\n" +
+    "6. If fewer than 2 items have real prices found, return an empty combinations array\n" +
+    "7. Costco prices are bulk — note the pack size (e.g. 'Chicken Breast 2kg - $14.99')\n" +
+    "8. For store addresses use only addresses found in the store location results above\n" +
+    "9. saleItems: only list items where the snippet explicitly mentions 'sale', 'flyer', 'this week', or a crossed-out price\n\n" +
+    'Return ONLY this JSON (price is null if not found in snippets):\n' +
+    '{"combinations":[{"rank":1,"label":"Best single store","stores":[{"name":"Store Name","address":"Full address from search, ' + city + ' ON","hours":"Hours from search or null"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":1,"breakdown":[{"store":"Store","items":["Brand Product Size - $x.xx (source: snippet title)"],"subtotal":0.00}],"tip":"tip"},{"rank":2,"label":"Best two stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":2,"breakdown":[{"store":"A","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00},{"store":"B","items":["Product - $x.xx (source: snippet)"],"subtotal":0.00}],"tip":"tip"},{"rank":3,"label":"Best three stores","stores":[{"name":"A","address":"Addr","hours":"h"},{"name":"B","address":"Addr","hours":"h"},{"name":"C","address":"Addr","hours":"h"}],"totalCAD":0.00,"savingsVsWorst":0.00,"trips":3,"breakdown":[{"store":"A","items":["p"],"subtotal":0.00},{"store":"B","items":["p"],"subtotal":0.00},{"store":"C","items":["p"],"subtotal":0.00}],"tip":"tip"}],' +
+    '"budgetCAD":' + budgetAmt + ',"withinBudget":true,"overBy":0,' +
+    '"perItemPrices":[{"name":"item name","store":"store name or null","price":0.00,"priceNull":false,"source":"snippet title it came from"}],' +
+    '"saleItems":[],' +
+    '"priceNote":"Prices extracted from live Google search results (Walmart, Loblaws, No Frills, Costco, Metro, Sobeys, FreshCo, Food Basics flyers/websites). Items with no price found are marked null. Always verify in-store."}';
 }
 
 function cleanItemName(item) {
