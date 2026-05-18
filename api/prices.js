@@ -395,7 +395,7 @@ export default async function handler(req, res) {
     const text = await callAI(
       system || "You are a helpful assistant.",
       prompt || "",
-      groqKey, geminiKey, 4096, true
+      groqKey, geminiKey, 1500, true
     );
     return res.status(200).json({ text: text.replace(/\n/g, " ").trim() });
   } catch (err) {
@@ -541,14 +541,16 @@ async function callMistral(system, prompt, maxTokens) {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
       body: JSON.stringify({
-        model: "mistral-small-latest",
+        model: "mistral-small-2503",
         max_tokens: maxTokens, temperature: 0.1,
         messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
       }),
     });
     const data = await r.json();
-    if (data.error) { console.error("Mistral:", data.error.message); return null; }
-    return data?.choices?.[0]?.message?.content ?? null;
+    if (data.error) { console.error("Mistral error:", JSON.stringify(data.error)); return null; }
+    const text = data?.choices?.[0]?.message?.content ?? null;
+    if (!text) { console.error("Mistral empty response:", JSON.stringify(data)); }
+    return text;
   } catch (e) { return null; }
 }
 
