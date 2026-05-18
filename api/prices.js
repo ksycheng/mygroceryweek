@@ -230,29 +230,37 @@ function getCity(p) {
 }
 
 async function callGroq(system, prompt, apiKey, maxTokens, fast) {
-  // fast=true (suggestions, dishes): use 8b-instant — low latency, generous TPM
-  // fast=false (price analysis): use 70b-versatile — better reasoning, but only as fallback
-  //   since large prompts may hit the 6k TPM free limit
-  const model = fast ? "llama-3.1-8b-instant" : "llama-3.3-70b-versatile";
-  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
-    body: JSON.stringify({
-      model, max_tokens: maxTokens, temperature: 0.1,
-      messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
-    }),
-  });
-  const data = await r.json();
-  if (data.error) { console.error("Groq:", data.error.message); return null; }
-  return data?.choices?.[0]?.message?.content ?? null;
+  const models = fast
+    ? ["llama-3.1-8b-instant", "gemma2-9b-it"]
+    : ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+
+  for (const model of models) {
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+      body: JSON.stringify({
+        model, max_tokens: maxTokens, temperature: 0.1,
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt }]
+      }),
+    });
+    const data = await r.json();
+    if (data.error) {
+      console.error("Groq " + model + ":", data.error.message);
+      continue; // try next model
+    }
+    const text = data?.choices?.[0]?.message?.content ?? null;
+    if (text) return text;
+  }
+  return null;
 }
 
 async function callGemini(system, prompt, apiKey, maxTokens) {
-  const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey, {
+  const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: system + "\n\n" + prompt }] }],
+      system_instruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens }
     }),
   });
