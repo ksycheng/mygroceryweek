@@ -458,8 +458,8 @@ export default function App() {
     setDishesLoading(true); setDishError(""); setDishes([]); setSelectedDish(null);
     try {
       const cuisines = (profile.cuisines||[]).length > 0 ? (profile.cuisines||[]).join(", ") : "Canadian";
-      const system = "You are a professional chef. Return ONLY a valid JSON array. No markdown, no code blocks, no explanation before or after.";
-      const prompt = "Suggest 8 dishes for " + (profile.people||2) + " people who enjoy " + cuisines + " cuisine. Include Breakfast, Lunch, Dinner, Snack, Dessert. Return ONLY JSON array: [{name,emoji,mealCategory,cuisine,prepTime,cookTime,totalTime,difficulty,servings,costPerPersonCAD,description,nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}]";
+      const system = "You are a professional chef. Return ONLY a valid JSON array. No markdown, no code blocks, no explanation.";
+      const prompt = "Suggest 8 dishes for " + (profile.people||2) + " people who enjoy " + cuisines + " cuisine. Include Breakfast, Lunch, Dinner, Snack, Dessert. Be concise. Return ONLY a JSON array with exactly 8 items: [{name,emoji,mealCategory,cuisine,prepTime,cookTime,difficulty,costPerPersonCAD,description}]";
       const text = await callAI(system, prompt);
       if (!text || text.trim() === "") throw new Error("Empty AI response");
       const clean = text.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
