@@ -18,26 +18,30 @@ export default async function handler(req, res) {
       const itemList = Array.isArray(items) ? items : items.split(",").map(s => s.trim());
       const cleanedItems = [...new Set(itemList.map(cleanItemName))];
 
-      // ALL searches run in parallel — 2 per item + store search
+      // 2 high-quality searches per item: store sites + flyer aggregators
+      // All run in parallel for speed; store location search runs simultaneously
       const [itemResults, storeResults] = await Promise.all([
         Promise.all(cleanedItems.map(item => Promise.all([
-          webSearch('"' + item + '" price Walmart Loblaws "No Frills" "Food Basics" Costco Metro Canada grocery 2026', serperKey),
-          webSearch(item + ' grocery price Ontario Canada flyer sale 2026', serperKey),
+          // Search store product pages directly — these contain real prices in snippets
+          webSearch(item + ' price canada grocery (site:walmart.ca OR site:loblaws.ca OR site:nofrills.ca OR site:metro.ca OR site:costco.ca OR site:sobeys.com OR site:realcanadiansuperstore.ca)', serperKey),
+          // Search flyer aggregators for this week's sales near the user's city
+          webSearch(item + ' "' + city + '" grocery flyer price (site:flipp.com OR site:reebee.com OR site:grocery.ca OR site:save.ca)', serperKey),
         ]))),
         Promise.all([
-          webSearch('Walmart Loblaws "No Frills" Costco Metro FreshCo store address hours ' + city + ' Ontario', serperKey),
+          webSearch('Walmart Loblaws "No Frills" "Real Canadian Superstore" grocery store ' + city + ' Ontario address hours phone', serperKey),
+          webSearch('Costco Metro Sobeys FreshCo "Food Basics" grocery store ' + city + ' Ontario address hours phone', serperKey),
         ])
       ]);
 
       const itemSnippets = {};
       cleanedItems.forEach((item, idx) => {
-        const combined = itemResults[idx].flat().slice(0, 10);
-        itemSnippets[item] = combined.map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
+        const combined = itemResults[idx].flat().slice(0, 12);
+        itemSnippets[item] = combined.map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
       });
 
       return res.status(200).json({
         itemSnippets,
-        storeSnippets: storeResults.flat().slice(0, 8).map(r => (r.title + ": " + r.snippet).substring(0, 200)).join("\n"),
+        storeSnippets: storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n"),
         city,
         cleanedItems,
         originalItems: itemList
@@ -80,22 +84,23 @@ export default async function handler(req, res) {
       const cleanedItems = [...new Set(itemList.map(cleanItemName))]; // Search ALL items - no cap
       const budgetAmt = budget || 200;
 
-      // 2 searches per item + store search (was 6 per item — too slow for Vercel timeout)
+      // 2 high-quality searches per item: store sites + flyer aggregators
       const [itemResults, storeResults] = await Promise.all([
         Promise.all(cleanedItems.map(item => Promise.all([
-          webSearch('"' + item + '" price Walmart Loblaws "No Frills" "Food Basics" Canada grocery 2026', serperKey),
-          webSearch('"' + item + '" price Costco Metro Sobeys FreshCo Ontario flyer sale 2026', serperKey),
+          webSearch(item + ' price canada grocery (site:walmart.ca OR site:loblaws.ca OR site:nofrills.ca OR site:metro.ca OR site:costco.ca OR site:sobeys.com OR site:realcanadiansuperstore.ca)', serperKey),
+          webSearch(item + ' "' + city + '" grocery flyer price (site:flipp.com OR site:reebee.com OR site:grocery.ca OR site:save.ca)', serperKey),
         ]))),
         Promise.all([
-          webSearch('Walmart Loblaws "No Frills" Costco Metro FreshCo store address hours ' + city + ' Ontario', serperKey),
+          webSearch('Walmart Loblaws "No Frills" "Real Canadian Superstore" grocery store ' + city + ' Ontario address hours phone', serperKey),
+          webSearch('Costco Metro Sobeys FreshCo "Food Basics" grocery store ' + city + ' Ontario address hours phone', serperKey),
         ])
       ]);
 
       const itemSnippets = {};
       cleanedItems.forEach((item, idx) => {
-        itemSnippets[item] = itemResults[idx].flat().slice(0, 8).map(r => (r.title + ": " + r.snippet).substring(0, 200)).join("\n");
+        itemSnippets[item] = itemResults[idx].flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
       });
-      const storeSnippets = storeResults.flat().slice(0, 10).map(r => (r.title + ": " + r.snippet).substring(0, 200)).join("\n");
+      const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
       const aiResponse = await callAI(
