@@ -477,19 +477,36 @@ export default function App() {
   };
 
   const loadDishDetails = async (dish) => {
-    if (dish.steps && dish.steps.length > 0) return dish; // already have details
+    if (dish.steps && dish.steps.length > 0) return dish;
     try {
-      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
-      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
+      const people = profile?.people || 2;
+      const system = "You are a chef. Return ONLY a valid JSON object. No markdown, no backticks, no explanation — pure JSON only.";
+      const prompt = `Give the full recipe for "${dish.name}" for ${people} people.
+Return ONLY this exact JSON structure with real values filled in:
+{
+  "nutrition": {"calories": "350 kcal", "protein": "25g", "carbs": "45g", "fat": "12g"},
+  "tips": ["Tip one here", "Tip two here"],
+  "ingredients": [
+    {"name": "chicken breast", "amount": "500", "unit": "g", "notes": "boneless"},
+    {"name": "olive oil", "amount": "2", "unit": "tbsp", "notes": ""}
+  ],
+  "steps": [
+    {"title": "Prepare the chicken", "detail": "Cut chicken into 2cm cubes and season with salt and pepper."},
+    {"title": "Cook the sauce", "detail": "Heat olive oil in a pan over medium heat and add garlic."}
+  ]
+}
+Include ALL real ingredients needed and at least 5 steps with clear detail. No placeholders.`;
       const text = await callAI(system, prompt);
-      if (!text) return dish;
-      const clean = text.replace(/```json|```/g, "").trim();
+      if (!text) { console.error("loadDishDetails: empty response"); return dish; }
+      const clean = text.replace(/```json|```/g, "").replace(/
+/g, " ").trim();
       const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) return dish;
+      if (!match) { console.error("loadDishDetails: no JSON found in:", clean.slice(0,200)); return dish; }
       const details = JSON.parse(match[0]);
+      if (!details.ingredients?.length) { console.error("loadDishDetails: no ingredients in response"); return dish; }
       return { ...dish, ...details };
     } catch(e) {
-      console.error("loadDishDetails:", e.message);
+      console.error("loadDishDetails error:", e.message);
       return dish;
     }
   };
