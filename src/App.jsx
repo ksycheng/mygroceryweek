@@ -481,9 +481,7 @@ export default function App() {
     try {
       const people = profile?.people || 2;
       const system = "You are a chef. Return ONLY a valid JSON object. No markdown, no backticks, no extra text.";
-      const prompt = 'Full recipe for "' + dish.name + '" for ' + people + ' people. Return ONLY this JSON:
-{"nutrition":{"calories":"350 kcal","protein":"25g","carbs":"40g","fat":"12g"},"tips":["tip one","tip two"],"ingredients":[{"name":"chicken breast","amount":"500","unit":"g","notes":"boneless"},{"name":"soy sauce","amount":"3","unit":"tbsp","notes":""}],"steps":[{"title":"Prepare ingredients","detail":"Cut chicken into cubes and marinate in soy sauce for 10 minutes."},{"title":"Cook","detail":"Heat oil in a pan over medium-high heat and cook chicken until golden."}]}
-Fill in real values for ' + dish.name + '. Include all ingredients needed and 5-8 steps.';
+      const prompt = 'Full recipe for "' + dish.name + '" for ' + people + ' people. Return ONLY this JSON: {"nutrition":{"calories":"350 kcal","protein":"25g","carbs":"40g","fat":"12g"},"tips":["tip one","tip two"],"ingredients":[{"name":"chicken breast","amount":"500","unit":"g","notes":"boneless"},{"name":"soy sauce","amount":"3","unit":"tbsp","notes":""}],"steps":[{"title":"Prepare ingredients","detail":"Cut chicken into cubes and marinate in soy sauce for 10 minutes."},{"title":"Cook","detail":"Heat oil in a pan over medium-high heat and cook chicken until golden."}]} Fill in real values for ' + dish.name + '. Include all ingredients needed and 5-8 steps.';
       const text = await callAI(system, prompt);
       if (!text) { console.error("loadDishDetails: no response"); return dish; }
       const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
