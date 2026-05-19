@@ -74,14 +74,14 @@ export default async function handler(req, res) {
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
           const items = extractPriceItems(clean, bi);
           console.log("Batch", bi, "found", items.length, "prices");
-          return items.filter(p => p.name && p.store && p.store !== "store" && p.price > 0);
+          return items.filter(p => p.name && p.store && p.price > 0);
         } catch(e) { console.error("Batch", bi, "err:", e.message); return []; }
       }));
 
       const allPrices = batchResults.flat();
-      console.log("Total prices:", allPrices.length);
+      console.log("Raw prices:", allPrices.length, allPrices.map(p=>p.name+"@"+p.store+"=$"+p.price).join(", "));
 
-      return res.status(200).json({ text: JSON.stringify(buildResult(allPrices, city, budget, postal)) });
+      return res.status(200).json({ text: JSON.stringify(await buildResult(allPrices, city, budget, postal)) });
     } catch (err) {
       console.error("Analyze error:", err.message);
       return res.status(500).json({ error: err.message });
@@ -128,12 +128,13 @@ export default async function handler(req, res) {
           );
           if (!aiResp) return [];
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          return extractPriceItems(clean, bi).filter(p => p.name && p.store && p.store !== "store" && p.price > 0);
+          return extractPriceItems(clean, bi).filter(p => p.name && p.store && p.price > 0);
         } catch(e) { console.error("PricesBatch", bi, "err:", e.message); return []; }
       }));
 
       const allPricesP = batchResultsP.flat();
-      return res.status(200).json({ text: JSON.stringify(buildResult(allPricesP, city, budgetAmt, postal)) });
+      console.log("Prices mode raw:", allPricesP.length, allPricesP.map(p=>p.name+"@"+p.store).join(", "));
+      return res.status(200).json({ text: JSON.stringify(await buildResult(allPricesP, city, budgetAmt, postal)) });
     } catch (err) {
       console.error("Prices error:", err.message);
       return res.status(500).json({ error: err.message });
@@ -234,13 +235,17 @@ function extractPriceItems(clean, bi) {
 async function buildResult(allPrices, city, budgetAmt, postal) {
   const placesKey = process.env.GOOGLE_PLACES_KEY;
 
-  // Cheapest price per item
-  const itemNames = [...new Set(allPrices.map(p => p.name))];
+  // Cheapest price per item - use case-insensitive matching
+  const itemNames = [...new Set(allPrices.map(p => p.name.toLowerCase()))];
   const cheapestPerItem = {};
-  itemNames.forEach(name => {
-    const options = allPrices.filter(p => p.name === name);
-    if (options.length > 0) cheapestPerItem[name] = options.reduce((best, p) => p.price < best.price ? p : best);
+  itemNames.forEach(nameLower => {
+    const options = allPrices.filter(p => p.name.toLowerCase() === nameLower);
+    if (options.length > 0) {
+      const best = options.reduce((best, p) => p.price < best.price ? p : best);
+      cheapestPerItem[nameLower] = best;
+    }
   });
+  console.log("Cheapest per item:", Object.keys(cheapestPerItem).length, "items:", Object.keys(cheapestPerItem).join(", "));
 
   // Build store info - enrich with Places API in parallel
   const storeInfo = {};
