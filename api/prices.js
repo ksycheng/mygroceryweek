@@ -33,8 +33,10 @@ export default async function handler(req, res) {
 
       const itemSnippets = {};
       cleanedItems.forEach((item, idx) => {
-        const combined = itemResults[idx].flat().slice(0, 12);
-        itemSnippets[item] = combined.map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
+        const combined = itemResults[idx].flat();
+        if (combined.length === 0) console.log("NO RESULTS:", item);
+        else console.log(item + ":", combined.length, "results, sample:", combined[0]?.snippet?.substring(0,60));
+        itemSnippets[item] = combined.slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
       });
 
       return res.status(200).json({
