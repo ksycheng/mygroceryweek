@@ -477,19 +477,20 @@ export default function App() {
   };
 
   const loadDishDetails = async (dish) => {
-    if (dish.steps && dish.steps.length > 0) return dish; // already have details
+    if (dish.steps && dish.steps.length > 0) return dish;
     try {
-      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
-      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
+      const people = profile?.people || 2;
+      const system = "You are a chef. Return ONLY a valid JSON object. No markdown, no backticks, no extra text.";
+      const prompt = 'Full recipe for "' + dish.name + '" for ' + people + ' people. Return ONLY this JSON: {"nutrition":{"calories":"450 kcal","protein":"35g","carbs":"20g","fat":"15g"},"tips":["tip one","tip two"],"ingredients":[{"name":"pork ribs","amount":"1","unit":"kg","notes":"baby back"},{"name":"BBQ sauce","amount":"200","unit":"ml","notes":""}],"steps":[{"title":"Season the ribs","detail":"Rub ribs with salt, pepper and garlic powder. Let sit for 30 minutes."},{"title":"Slow cook","detail":"Bake at 300F for 2.5 hours covered in foil."}]} Fill in real values for ' + dish.name + '. Include ALL ingredients and 5-8 detailed steps.';
       const text = await callAI(system, prompt);
-      if (!text) return dish;
-      const clean = text.replace(/```json|```/g, "").trim();
+      if (!text) { console.error("loadDishDetails: empty response"); return dish; }
+      const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
       const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) return dish;
+      if (!match) { console.error("loadDishDetails: no JSON found"); return dish; }
       const details = JSON.parse(match[0]);
       return { ...dish, ...details };
     } catch(e) {
-      console.error("loadDishDetails:", e.message);
+      console.error("loadDishDetails error:", e.message);
       return dish;
     }
   };
