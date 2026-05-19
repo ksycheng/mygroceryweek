@@ -459,7 +459,7 @@ export default function App() {
     try {
       const cuisines = (profile.cuisines||[]).length > 0 ? (profile.cuisines||[]).join(", ") : "Canadian";
       const system = "You are a professional chef. Return ONLY a valid JSON array. No markdown, no code blocks, no explanation.";
-      const prompt = "Suggest 8 dishes for " + (profile.people||2) + " people who enjoy " + cuisines + " cuisine. Include Breakfast, Lunch, Dinner, Snack, Dessert. Be concise. Return ONLY a JSON array with exactly 8 items: [{name,emoji,mealCategory,cuisine,prepTime,cookTime,difficulty,costPerPersonCAD,description}]";
+      const prompt = "Suggest 8 dishes for " + (profile.people||2) + " people who enjoy " + cuisines + " cuisine. Include at least one Breakfast, Lunch, Dinner, Snack, Dessert. Return ONLY a JSON array with exactly 8 items, each with these fields only: [{name,emoji,mealCategory,cuisine,prepTime,cookTime,difficulty,costPerPersonCAD,description}]";
       const text = await callAI(system, prompt);
       if (!text || text.trim() === "") throw new Error("Empty AI response");
       const clean = text.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
@@ -475,12 +475,34 @@ export default function App() {
     finally { setDishesLoading(false); }
   };
 
-  const openDish = (dish) => {
-    setSelectedDish(dish);
+  const loadDishDetails = async (dish) => {
+    if (dish.steps && dish.steps.length > 0) return dish; // already have details
+    try {
+      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
+      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
+      const text = await callAI(system, prompt);
+      if (!text) return dish;
+      const clean = text.replace(/```json|```/g, "").trim();
+      const match = clean.match(/\{[\s\S]*\}/);
+      if (!match) return dish;
+      const details = JSON.parse(match[0]);
+      return { ...dish, ...details };
+    } catch(e) {
+      console.error("loadDishDetails:", e.message);
+      return dish;
+    }
+  };
+
+  const openDish = async (dish) => {
+    setSelectedDish(dish); // show immediately with basic info
+    setScreen("dishDetail");
+    // Load full details (nutrition, ingredients, steps) in background
+    const full = await loadDishDetails(dish);
+    setSelectedDish(full);
     // Auto-check ingredients already on the grocery list
     const autoChecked = {};
-    if (dish.ingredients) {
-      dish.ingredients.forEach((ing, idx) => {
+    if (full.ingredients) {
+      full.ingredients.forEach((ing, idx) => {
         const ingName = ing.name.toLowerCase();
         const alreadyOnList = items.some(item => {
           const itemName = item.name.toLowerCase();
