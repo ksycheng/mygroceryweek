@@ -59,32 +59,30 @@ export default async function handler(req, res) {
       const { itemSnippets, storeSnippets, city, cleanedItems } = searchResults;
       const budgetAmt = budget || 200;
 
-      // Batch 4 items at a time — keeps each AI call small enough for free tier limits
+      // Run all batches in PARALLEL — all fire simultaneously, done in ~2s total
       const BATCH = 4;
       const batches = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH) {
         batches.push(cleanedItems.slice(i, i + BATCH));
       }
-      console.log("Running", batches.length, "batches in parallel for", cleanedItems.length, "items");
-      const batchResults = await Promise.all(batches.map(async (batchItems, batchIdx) => {
-        const priceContext = batchItems.map(item => "=== " + item + "===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
+      const batchResults = await Promise.all(batches.map(async (batchItems, bi) => {
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
           const aiResponse = await callAI(
-            "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+            "Extract ONLY prices explicitly in snippets. Never guess. Return ONLY valid JSON.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
             groqKey, geminiKey, 1500
           );
           if (!aiResponse) return [];
           const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-          const match = clean.match(/\{[\s\S]*\}/);
-          if (!match) return [];
-          const parsed = JSON.parse(match[0]);
-          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price && p.price > 0);
-        } catch(e) { console.error("Batch", batchIdx, "error:", e.message); return []; }
+          const m = clean.match(/\{[\s\S]*\}/);
+          if (!m) return [];
+          const parsed = JSON.parse(m[0]);
+          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
+        } catch(e) { console.error("Batch", bi, "error:", e.message); return []; }
       }));
       const allPrices = batchResults.flat();
-      console.log("Total prices found:", allPrices.length);
-
+      console.log("Prices found:", allPrices.length);
       // For each item pick the cheapest price found across all stores
       const itemNames = [...new Set(allPrices.map(p => p.name))];
       const cheapestPerItem = {};
@@ -261,32 +259,30 @@ export default async function handler(req, res) {
       const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
       const priceContext = Object.entries(itemSnippets).map(([item, s]) => "=== " + item + " ===\n" + s).join("\n\n");
 
-      // Batch 4 items at a time — keeps each AI call small enough for free tier limits
+      // Run all batches in PARALLEL
       const BATCH_P = 4;
       const batchesP = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH_P) {
         batchesP.push(cleanedItems.slice(i, i + BATCH_P));
       }
-      console.log("Running", batchesP.length, "batches in parallel for", cleanedItems.length, "items");
-      const batchResultsP = await Promise.all(batchesP.map(async (batchItems, batchIdx) => {
-        const priceContext = batchItems.map(item => "=== " + item + "===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
+      const batchResultsP = await Promise.all(batchesP.map(async (batchItems, bi) => {
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
           const aiResponse = await callAI(
-            "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
+            "Extract ONLY prices explicitly in snippets. Never guess. Return ONLY valid JSON.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
             groqKey, geminiKey, 1500
           );
           if (!aiResponse) return [];
           const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-          const match = clean.match(/\{[\s\S]*\}/);
-          if (!match) return [];
-          const parsed = JSON.parse(match[0]);
-          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price && p.price > 0);
-        } catch(e) { console.error("Batch", batchIdx, "error:", e.message); return []; }
+          const m = clean.match(/\{[\s\S]*\}/);
+          if (!m) return [];
+          const parsed = JSON.parse(m[0]);
+          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
+        } catch(e) { console.error("Batch", bi, "error:", e.message); return []; }
       }));
       const allPricesP = batchResultsP.flat();
-      console.log("Total prices found:", allPricesP.length);
-
+      console.log("Prices found:", allPricesP.length);
       const itemNamesP = [...new Set(allPricesP.map(p => p.name))];
       const cheapestPerItemP = {};
       itemNamesP.forEach(name => {
@@ -548,27 +544,23 @@ async function callOpenRouter(system, prompt, maxTokens) {
 async function getStoreAddress(storeName, city, placesKey) {
   if (!placesKey) return null;
   try {
-    // Step 1: Find the place and get its place_id
-    const query = encodeURIComponent(storeName + " grocery " + city + " Ontario Canada");
-    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address,name&key=" + placesKey;
+    // Single call: get address + place_id, then details in parallel
+    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
+    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address&key=" + placesKey;
     const searchRes = await fetch(searchUrl);
     const searchData = await searchRes.json();
     const candidate = searchData?.candidates?.[0];
-    if (!candidate) { console.log("Places: no candidate for", storeName); return null; }
-
-    // Step 2: Get place details including opening hours
-    const placeId = candidate.place_id;
-    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + placeId + "&fields=formatted_address,opening_hours&key=" + placesKey;
+    if (!candidate) return null;
+    // Get hours via place details
+    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + candidate.place_id + "&fields=opening_hours&key=" + placesKey;
     const detailRes = await fetch(detailUrl);
     const detailData = await detailRes.json();
-    const details = detailData?.result;
-
-    const address = details?.formatted_address || candidate.formatted_address || null;
-    const weekdayText = details?.opening_hours?.weekday_text;
-    const hours = weekdayText ? weekdayText.join(" | ") : null;
-    console.log("Places found:", storeName, "->", address);
-    return { address, hours };
-  } catch(e) { console.error("Places error:", e.message); return null; }
+    const weekdayText = detailData?.result?.opening_hours?.weekday_text;
+    return {
+      address: candidate.formatted_address || null,
+      hours: weekdayText ? weekdayText.slice(0,2).join(", ") : null // just Mon-Tue to keep short
+    };
+  } catch(e) { return null; }
 }
 
 async function callMistral(system, prompt, maxTokens) {
