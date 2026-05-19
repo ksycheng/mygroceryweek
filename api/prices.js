@@ -1,3 +1,64 @@
+// Physical Canadian grocery chains only — no online stores
+// Base Canadian grocery chains (always searched)
+const BASE_STORES = [
+  "Walmart", "Loblaws", "No Frills", "Real Canadian Superstore", "Superstore",
+  "Metro", "Sobeys", "FreshCo", "Food Basics", "Costco",
+  "Farm Boy", "Giant Tiger", "Bulk Barn", "Foodland",
+  "IGA", "Zehrs", "Valu-mart", "Your Independent Grocer"
+];
+
+// Cuisine-specific specialty stores
+const CUISINE_STORES = {
+  "Asian":            ["T&T", "T&T Supermarket", "Nations Fresh Foods", "Foody Mart", "PAT Mart", "Oceans Fresh Food Market", "Sunny Foodmart", "Ample Food Market", "Galleria Supermarket", "Grand Fortune", "Well Come Food Mart"],
+  "Japanese":         ["T&T", "Galleria Supermarket", "Sanko", "Fujiya"],
+  "Thai":             ["T&T", "Nations Fresh Foods", "Foody Mart", "Thai grocery"],
+  "Chinese":          ["T&T", "Nations Fresh Foods", "Foody Mart", "PAT Mart", "Grand Fortune", "Well Come Food Mart", "Sunny Foodmart"],
+  "Korean":           ["Galleria Supermarket", "Hannam Supermarket", "PAT Mart", "Kim's Convenient"],
+  "Indian":           ["Oceans Fresh Food Market", "Nations Fresh Foods", "Iqbal Foods", "Chalo FreshCo", "Spice Village", "Surati Sweet Mart"],
+  "Mediterranean":    ["Oceans Fresh Food Market", "Iqbal Foods", "Middle East Bakery"],
+  "Middle Eastern":   ["Oceans Fresh Food Market", "Iqbal Foods", "Halal Farms", "Hasty Market"],
+  "Italian":          ["Commisso's", "Emilio's", "Italian store"],
+  "Mexican":          ["No Frills", "Walmart", "Latin grocery"],
+  "Vegetarian":       ["Farm Boy", "Whole Foods", "Nature's Emporium"],
+  "Vegan":            ["Farm Boy", "Whole Foods", "Nature's Emporium"],
+  "Keto/Low-carb":    ["Farm Boy", "Whole Foods", "Costco"],
+};
+
+function getStoresForCuisines(cuisines) {
+  const extra = new Set();
+  (cuisines || []).forEach(c => {
+    // Match cuisine key
+    const key = Object.keys(CUISINE_STORES).find(k => c.toLowerCase().includes(k.toLowerCase()));
+    if (key) CUISINE_STORES[key].forEach(s => extra.add(s));
+    // Also check Asian broadly
+    if (["Japanese","Thai","Chinese","Korean","Asian"].some(a => c.includes(a))) {
+      CUISINE_STORES["Asian"].forEach(s => extra.add(s));
+    }
+  });
+  return [...BASE_STORES, ...extra];
+}
+
+// All physical stores for validation
+const PHYSICAL_STORES = [
+  ...BASE_STORES,
+  ...Object.values(CUISINE_STORES).flat()
+];
+
+function isPhysicalStore(name, storeList) {
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  const list = storeList || PHYSICAL_STORES;
+  return list.some(s => lower.includes(s.toLowerCase()));
+}
+
+function normalizeStore(name, storeList) {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  const list = storeList || PHYSICAL_STORES;
+  const match = list.find(s => lower.includes(s.toLowerCase()));
+  return match || null;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -8,22 +69,21 @@ export default async function handler(req, res) {
   const groqKey = process.env.GROQ_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
   const serperKey = process.env.SERPER_KEY;
-  const { prompt, system, mode, items, postal, budget, itemName, searchResults } = req.body;
+  const { prompt, system, mode, items, postal, budget, itemName, searchResults, cuisines } = req.body;
+  const activeStores = getStoresForCuisines(cuisines);
 
   // ── SEARCH MODE ────────────────────────────────────────────────────
   if (mode === "search" && items && postal && serperKey) {
     try {
       const city = getCity(postal.replace(/\s/g, "").toUpperCase());
-      const postalClean = postal.replace(/\s/g, "").toUpperCase();
       const itemList = Array.isArray(items) ? items : items.split(",").map(s => s.trim());
       const cleanedItems = [...new Set(itemList.map(cleanItemName))];
 
-      // Search all items in parallel: Flipp first, then Shopping fallback
       const [itemResults, storeResults] = await Promise.all([
         Promise.all(cleanedItems.map(item => Promise.all([
-          flippSearch(item, postalClean),           // Primary: real flyer prices
-          shoppingSearch(item, serperKey),           // Fallback: Google Shopping
-          webSearch(item + ' price walmart.ca OR nofrills.ca OR metro.ca canada', serperKey),
+          shoppingSearch(item, serperKey),
+          webSearch('"' + item + '" price (site:walmart.ca OR site:nofrills.ca OR site:metro.ca OR site:loblaws.ca OR site:sobeys.com OR site:realcanadiansuperstore.ca OR site:freshco.com OR site:foodbasics.ca OR site:tntsupermarket.com)', serperKey),
+          webSearch('"' + item + '" price ' + activeStores.filter(s => !BASE_STORES.includes(s)).slice(0,5).map(s => '"'+s+'"').join(' OR ') + ' grocery canada', serperKey),
         ]))),
         Promise.all([
           webSearch('Walmart Loblaws "No Frills" "Real Canadian Superstore" grocery store ' + city + ' Ontario address hours', serperKey),
@@ -32,11 +92,10 @@ export default async function handler(req, res) {
       ]);
 
       const itemSnippets = {};
-      cleanedItems.forEach((item, idx) => {
-        const combined = itemResults[idx].flat();
-        const flippCount = itemResults[idx][0].length;
-        console.log(item + ": Flipp=" + flippCount + " Shopping=" + itemResults[idx][1].length + " Web=" + itemResults[idx][2].length);
-        itemSnippets[item] = combined.slice(0, 15).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
+      cleanedItems.forEach((item, i) => {
+        const all = itemResults[i].flat();
+        console.log(item + ": " + all.length + " results");
+        itemSnippets[item] = all.slice(0, 15).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
       });
 
       return res.status(200).json({
@@ -55,53 +114,50 @@ export default async function handler(req, res) {
     try {
       const { itemSnippets, storeSnippets, city, cleanedItems } = searchResults;
       const budgetAmt = budget || 200;
-
-      // Run all batches in PARALLEL
       const BATCH = 4;
       const batches = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH) batches.push(cleanedItems.slice(i, i + BATCH));
-      console.log("Parallel batches:", batches.length, "for", cleanedItems.length, "items");
+      console.log("Batches:", batches.length, "for", cleanedItems.length, "items");
 
       const batchResults = await Promise.all(batches.map(async (batchItems, bi) => {
-        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results")).join("\n\n");
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
           const aiResp = await callAI(
-            "Extract grocery prices from search results. Return ONLY valid JSON.",
-            buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+            "You extract grocery prices from search snippets. Return ONLY valid JSON.",
+            buildPrompt(batchItems, priceContext, storeSnippets, city),
             groqKey, geminiKey, 1500
           );
           if (!aiResp) return [];
-          const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          const items = extractPriceItems(clean, bi);
-          console.log("Batch", bi, "found", items.length, "prices");
-          return items.filter(p => p.name && p.store && p.price > 0);
+          const items = parseAIResponse(aiResp, bi);
+          console.log("Batch", bi, "raw:", items.length, items.map(p => p.name + "@" + p.store).join(", "));
+          return items.filter(p => p.name && p.price > 0 && isPhysicalStore(p.store));
         } catch(e) { console.error("Batch", bi, "err:", e.message); return []; }
       }));
 
-      const allPrices = batchResults.flat();
-      console.log("Raw prices:", allPrices.length, allPrices.map(p=>p.name+"@"+p.store+"=$"+p.price).join(", "));
+      const allPrices = batchResults.flat().map(p => ({ ...p, store: normalizeStore(p.store) || p.store }));
+      console.log("Physical store prices:", allPrices.length, allPrices.map(p => p.name + "@" + p.store + "=$" + p.price).join(", "));
 
-      return res.status(200).json({ text: JSON.stringify(await buildResult(allPrices, city, budget, postal)) });
+      const result = await buildResult(allPrices, city, budgetAmt);
+      return res.status(200).json({ text: JSON.stringify(result) });
     } catch (err) {
       console.error("Analyze error:", err.message);
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── PRICES MODE (combined search+analyze) ─────────────────────────
+  // ── PRICES MODE ────────────────────────────────────────────────────
   if (mode === "prices" && items && postal && serperKey) {
     try {
       const city = getCity(postal.replace(/\s/g, "").toUpperCase());
-      const postalClean = postal.replace(/\s/g, "").toUpperCase();
       const itemList = Array.isArray(items) ? items : items.split(",").map(s => s.trim());
       const cleanedItems = [...new Set(itemList.map(cleanItemName))];
       const budgetAmt = budget || 200;
 
       const [itemResults, storeResults] = await Promise.all([
         Promise.all(cleanedItems.map(item => Promise.all([
-          flippSearch(item, postalClean),
           shoppingSearch(item, serperKey),
-          webSearch(item + ' price canada grocery 2025', serperKey),
+          webSearch('"' + item + '" price (site:walmart.ca OR site:nofrills.ca OR site:metro.ca OR site:loblaws.ca OR site:sobeys.com OR site:realcanadiansuperstore.ca OR site:freshco.com OR site:foodbasics.ca OR site:tntsupermarket.com)', serperKey),
+          webSearch('"' + item + '" price ' + activeStores.filter(s => !BASE_STORES.includes(s)).slice(0,5).map(s => '"'+s+'"').join(' OR ') + ' grocery canada', serperKey),
         ]))),
         Promise.all([
           webSearch('Walmart Loblaws "No Frills" "Real Canadian Superstore" grocery store ' + city + ' Ontario address hours', serperKey),
@@ -110,235 +166,221 @@ export default async function handler(req, res) {
       ]);
 
       const itemSnippets = {};
-      cleanedItems.forEach((item, idx) => {
-        itemSnippets[item] = itemResults[idx].flat().slice(0, 15).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
+      cleanedItems.forEach((item, i) => {
+        itemSnippets[item] = itemResults[i].flat().slice(0, 15).map(r => (r.title + ": " + r.snippet).substring(0, 300)).join("\n");
       });
       const storeSnippets = storeResults.flat().slice(0, 12).map(r => (r.title + ": " + r.snippet).substring(0, 250)).join("\n");
 
-      const BATCH_P = 4;
-      const batchesP = [];
-      for (let i = 0; i < cleanedItems.length; i += BATCH_P) batchesP.push(cleanedItems.slice(i, i + BATCH_P));
-      const batchResultsP = await Promise.all(batchesP.map(async (batchItems, bi) => {
-        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results")).join("\n\n");
+      const BATCH = 4;
+      const batches = [];
+      for (let i = 0; i < cleanedItems.length; i += BATCH) batches.push(cleanedItems.slice(i, i + BATCH));
+
+      const batchResults = await Promise.all(batches.map(async (batchItems, bi) => {
+        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
           const aiResp = await callAI(
-            "Extract grocery prices from search results. Return ONLY valid JSON.",
-            buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
+            "You extract grocery prices from search snippets. Return ONLY valid JSON.",
+            buildPrompt(batchItems, priceContext, storeSnippets, city),
             groqKey, geminiKey, 1500
           );
           if (!aiResp) return [];
-          const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          return extractPriceItems(clean, bi).filter(p => p.name && p.store && p.price > 0);
-        } catch(e) { console.error("PricesBatch", bi, "err:", e.message); return []; }
+          const its = parseAIResponse(aiResp, bi);
+          return its.filter(p => p.name && p.price > 0 && isPhysicalStore(p.store));
+        } catch(e) { return []; }
       }));
 
-      const allPricesP = batchResultsP.flat();
-      console.log("Prices mode raw:", allPricesP.length, allPricesP.map(p=>p.name+"@"+p.store).join(", "));
-      return res.status(200).json({ text: JSON.stringify(await buildResult(allPricesP, city, budgetAmt, postal)) });
+      const allPrices = batchResults.flat().map(p => ({ ...p, store: normalizeStore(p.store) || p.store }));
+      console.log("Prices mode physical:", allPrices.length, allPrices.map(p => p.name + "@" + p.store + "=$" + p.price).join(", "));
+
+      const result = await buildResult(allPrices, city, budgetAmt);
+      return res.status(200).json({ text: JSON.stringify(result) });
     } catch (err) {
       console.error("Prices error:", err.message);
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── WISHLIST MODE ─────────────────────────────────────────────────
+  // ── WISHLIST MODE ──────────────────────────────────────────────────
   if (mode === "wishlist" && itemName && postal && serperKey) {
     try {
       const city = getCity(postal.replace(/\s/g, "").toUpperCase());
-      const postalClean = postal.replace(/\s/g, "").toUpperCase();
-      const [flippResults, shoppingResults, webResults] = await Promise.all([
-        flippSearch(itemName, postalClean),
+      const [shopping, web] = await Promise.all([
         shoppingSearch(itemName, serperKey),
-        webSearch(itemName + ' price canada grocery store', serperKey),
+        webSearch('"' + itemName + '" price (site:walmart.ca OR site:nofrills.ca OR site:metro.ca OR site:loblaws.ca)', serperKey),
       ]);
-      const snippets = [...flippResults, ...shoppingResults, ...webResults]
-        .slice(0, 12).map(r => r.title + ": " + r.snippet).join("\n");
-
+      const snippets = [...shopping, ...web].slice(0, 10).map(r => r.title + ": " + r.snippet).join("\n");
       const aiResp = await callAI(
-        "Extract grocery price from search results. Return ONLY valid JSON, no markdown.",
-        'Search results for "' + itemName + '" near ' + city + ', Ontario:\n\n' + snippets + '\n\nExtract the best current price. Return ONLY: {"currentPrice":2.99,"regularPrice":3.49,"onSale":true,"saleStore":"No Frills","address":null,"hours":null,"saleEnds":null,"savings":0.50,"source":"snippet source","note":"brief note"}',
+        "Extract grocery price from snippets. Only use physical store prices. Return ONLY valid JSON.",
+        'Price for "' + itemName + '" near ' + city + ':\n\n' + snippets + '\n\nReturn: {"currentPrice":2.99,"regularPrice":3.49,"onSale":true,"saleStore":"No Frills","address":null,"hours":null,"saleEnds":null,"savings":0.50,"source":"snippet source","note":"brief note"}',
         groqKey, geminiKey, 500
       );
       const clean = (aiResp || "").replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
       const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) return res.status(200).json({ currentPrice: 0, note: "No price found" });
+      if (!match) return res.status(200).json({ currentPrice: 0, note: "No price found at physical stores" });
       return res.status(200).json(JSON.parse(match[0]));
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── STANDARD AI (meals, dishes, suggestions) ──────────────────────
+  // ── STANDARD AI ────────────────────────────────────────────────────
   try {
-    const text = await callAI(
-      system || "You are a helpful assistant.",
-      prompt || "",
-      groqKey, geminiKey, 1500, true
-    );
+    const text = await callAI(system || "You are a helpful assistant.", prompt || "", groqKey, geminiKey, 1500, true);
     return res.status(200).json({ text: text.replace(/[\r\n]+/g, " ").trim() });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 }
 
-// ── FLIPP API ──────────────────────────────────────────────────────
-// Flipp aggregates real weekly flyers from all major Canadian grocery chains
-async function flippSearch(item, postal) {
-  try {
-    // Flipp API - aggregates real weekly flyers from all major Canadian grocery chains
-    // postal should be formatted like "L6C0L6" (no space)
-    const postalFormatted = postal.replace(/\s/g, "").toUpperCase();
-    const url = "https://backflipp.wishabi.com/flipp/items/search?locale=en-ca&postal_code=" + postalFormatted + "&q=" + encodeURIComponent(item);
-    const r = await fetch(url, {
-      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
-    });
-    if (!r.ok) {
-      const body = await r.text();
-      console.log("Flipp error", r.status, "for", item, ":", body.substring(0, 100));
-      return [];
-    }
-    const data = await r.json();
-    const flippItems = (data.items || data || []).slice(0, 8);
-    if (flippItems.length === 0) { console.log("Flipp: 0 results for:", item); return []; }
-    console.log("Flipp found", flippItems.length, "for", item, "- first:", flippItems[0]?.name, "@", flippItems[0]?.merchant, "$", flippItems[0]?.current_price);
-    return flippItems
-      .filter(fi => fi.current_price || fi.sale_price)
-      .map(fi => ({
-        title: (fi.merchant || "Store") + ": " + (fi.name || item),
-        snippet: (fi.name || item) + " - $" + (fi.current_price || fi.sale_price) +
-          " at " + (fi.merchant || "store") +
-          (fi.valid_to ? " (sale ends " + fi.valid_to.substring(0,10) + ")" : "") +
-          (fi.pre_price ? " (was $" + fi.pre_price + ")" : "")
-      }));
-  } catch(e) { console.log("Flipp exception for", item, ":", e.message); return []; }
+// ── BUILD AI PROMPT ────────────────────────────────────────────────
+function buildPrompt(items, priceContext, storeSnippets, city) {
+  return "SEARCH RESULTS FROM CANADIAN GROCERY STORE WEBSITES:\n" + priceContext +
+    "\n\nFor each item, find its price from a PHYSICAL grocery store in the search results." +
+    "\nItems: " + items.join(", ") +
+    "\n\nRules:" +
+    "\n- ONLY use prices from physical stores: Walmart, No Frills, Loblaws, Metro, Sobeys, FreshCo, Food Basics, Costco, Real Canadian Superstore" +
+    "\n- NEVER use online-only retailers, brand names, or unknown sources as the store" +
+    "\n- Use the lowest price found from a physical store" +
+    "\n- If no physical store price found for an item, omit it" +
+    "\n- Return compact JSON:\n" +
+    '{"perItemPrices":[{"name":"item","store":"Walmart","price":2.99,"onSale":false}]}';
 }
 
-// ── HELPER: extract price items from AI response ───────────────────
-function extractPriceItems(clean, bi) {
+// ── PARSE AI RESPONSE ──────────────────────────────────────────────
+function parseAIResponse(raw, bi) {
+  const clean = raw.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
   let items = [];
   try {
-    const objMatch = clean.match(/\{[\s\S]*\}/);
-    if (objMatch) {
-      const parsed = JSON.parse(objMatch[0]);
-      items = parsed.perItemPrices || [];
-    }
+    const m = clean.match(/\{[\s\S]*\}/);
+    if (m) { const p = JSON.parse(m[0]); items = p.perItemPrices || []; }
   } catch(e) {
-    // Truncated JSON - use regex to extract whatever completed
+    // Truncated - regex extract
     const matches = clean.matchAll(/"name"\s*:\s*"([^"]+)"[^}]*"store"\s*:\s*"([^"]+)"[^}]*"price"\s*:\s*([\d.]+)/g);
-    for (const m of matches) {
-      if (m[2] !== "store" && parseFloat(m[3]) > 0) {
-        items.push({ name: m[1], store: m[2], price: parseFloat(m[3]) });
-      }
-    }
+    for (const m of matches) items.push({ name: m[1], store: m[2], price: parseFloat(m[3]) });
   }
-  if (items.length === 0) {
-    const arrMatch = clean.match(/\[[\s\S]*?\]/);
-    if (arrMatch) { try { items = JSON.parse(arrMatch[0]); } catch(e) {} }
+  if (!items.length) {
+    const a = clean.match(/\[[\s\S]*?\]/);
+    if (a) { try { items = JSON.parse(a[0]); } catch(e) {} }
   }
   return items;
 }
 
-// ── HELPER: build result object from prices ────────────────────────
-async function buildResult(allPrices, city, budgetAmt, postal) {
+// ── BUILD RESULT ───────────────────────────────────────────────────
+async function buildResult(allPrices, city, budgetAmt) {
   const placesKey = process.env.GOOGLE_PLACES_KEY;
 
-  // Cheapest price per item - use case-insensitive matching
-  // Filter out bogus store names before deduplication
-  const validPriceEntries = allPrices.filter(p => {
-    if (!p.name || !p.store || !p.price) return false;
-    const storeLower = p.store.toLowerCase();
-    // Reject if store name looks like a product or brand, not a grocery chain
-    if (storeLower === "store" || storeLower === "unknown") return false;
-    if (p.store.length > 30) return false; // Too long to be a store name
-    if (p.store === p.name) return false;  // Store name same as item = wrong
-    if (p.store.toUpperCase() === p.store && p.store.length > 10) return false; // ALL CAPS product name
-    return true;
-  });
-  console.log("Valid prices after filter:", validPriceEntries.length, "of", allPrices.length);
-
-  const itemNames = [...new Set(validPriceEntries.map(p => p.name.toLowerCase()))];
-  const cheapestPerItem = {};
-  itemNames.forEach(nameLower => {
-    const options = validPriceEntries.filter(p => p.name.toLowerCase() === nameLower);
-    if (options.length > 0) {
-      const best = options.reduce((best, p) => p.price < best.price ? p : best);
-      cheapestPerItem[nameLower] = { ...best, name: best.name }; // preserve original case
-    }
-  });
-  console.log("Cheapest per item:", Object.keys(cheapestPerItem).length, "items:", Object.keys(cheapestPerItem).join(", "));
-
-  // Build store info - enrich with Places API in parallel
-  const storeInfo = {};
+  // Cheapest price per item across all physical stores
+  const byItem = {};
   allPrices.forEach(p => {
-    if (p.store && !storeInfo[p.store]) storeInfo[p.store] = { address: null, hours: null };
+    const key = p.name.toLowerCase();
+    if (!byItem[key] || p.price < byItem[key].price) byItem[key] = p;
   });
-  await Promise.all(Object.keys(storeInfo).map(async store => {
-    const place = await getStoreAddress(store, city, placesKey);
-    storeInfo[store] = place || { address: city + ", ON", hours: null };
+  const cheapest = Object.values(byItem);
+
+  // Get store addresses + hours in parallel
+  const storeNames = [...new Set(cheapest.map(p => p.store))];
+  const storeInfo = {};
+  await Promise.all(storeNames.map(async store => {
+    const info = await getStoreAddress(store, city, placesKey);
+    storeInfo[store] = info || { address: city + ", ON", hours: null };
   }));
 
   // Group by store
-  const storeGroups = {};
-  Object.values(cheapestPerItem).forEach(p => {
-    if (!storeGroups[p.store]) storeGroups[p.store] = [];
-    storeGroups[p.store].push(p);
+  const byStore = {};
+  cheapest.forEach(p => {
+    if (!byStore[p.store]) byStore[p.store] = [];
+    byStore[p.store].push(p);
   });
-  const sortedStores = Object.entries(storeGroups).sort((a, b) => b[1].length - a[1].length);
+  const sorted = Object.entries(byStore).sort((a, b) => b[1].length - a[1].length);
 
-  const buildCombo = (storeNames, rank, label, tip) => {
-    const breakdown = storeNames.map(store => {
-      const its = storeGroups[store] || [];
-      return { store, items: its.map(p => p.name + " - $" + p.price.toFixed(2) + (p.source ? " (" + p.source + ")" : "")), subtotal: +its.reduce((s,p)=>s+p.price,0).toFixed(2) };
-    });
+  // Build combinations
+  const combos = [];
+  const makeCombo = (stores, rank, label, tip) => {
+    const breakdown = stores.map(([s, ps]) => ({
+      store: s,
+      items: ps.map(p => p.name + " - $" + p.price.toFixed(2)),
+      subtotal: +ps.reduce((sum, p) => sum + p.price, 0).toFixed(2)
+    }));
     return {
       rank, label,
-      stores: storeNames.map(s => ({ name: s, address: (storeInfo[s]||{}).address||(city+", ON"), hours: (storeInfo[s]||{}).hours||null })),
-      totalCAD: +breakdown.reduce((s,b)=>s+b.subtotal,0).toFixed(2),
-      savingsVsWorst: 0, trips: storeNames.length, breakdown, tip
+      stores: stores.map(([s]) => ({ name: s, address: (storeInfo[s]||{}).address||(city+", ON"), hours: (storeInfo[s]||{}).hours||null })),
+      totalCAD: +breakdown.reduce((sum, b) => sum + b.subtotal, 0).toFixed(2),
+      savingsVsWorst: 0, trips: stores.length, breakdown, tip
     };
   };
 
-  const combinations = [];
-  if (sortedStores.length >= 1) {
-    combinations.push(buildCombo([sortedStores[0][0]], 1, "Best single store", "All found prices at the cheapest store. Always verify in-store."));
-    if (sortedStores.length >= 2 && sortedStores[1][1].length > 0) {
-      combinations.push(buildCombo([sortedStores[0][0], sortedStores[1][0]], 2, "More items (2 stores)", "Covers more items across two stores."));
-      if (sortedStores.length >= 3 && sortedStores[2][1].length > 0) {
-        combinations.push(buildCombo([sortedStores[0][0], sortedStores[1][0], sortedStores[2][0]], 3, "Most coverage (3 stores)", "Maximum item coverage — most trips required."));
-      }
-    }
+  if (sorted.length >= 1) combos.push(makeCombo([sorted[0]], 1, "Best single store", "Cheapest single store for your list. Always verify prices in-store."));
+  if (sorted.length >= 2 && sorted[1][1].length > 0) combos.push(makeCombo([sorted[0], sorted[1]], 2, "Best two stores", "Split your shop between two stores for more savings."));
+  if (sorted.length >= 3 && sorted[2][1].length > 0) combos.push(makeCombo([sorted[0], sorted[1], sorted[2]], 3, "Best three stores", "Maximum coverage across three stores."));
+
+  if (combos.length > 1) {
+    const best = Math.min(...combos.map(c => c.totalCAD));
+    combos.forEach(c => { c.savingsVsWorst = +(c.totalCAD - best).toFixed(2); });
   }
 
-  const worst = Math.max(...combinations.map(c => c.totalCAD), 0);
-  const best = Math.min(...combinations.map(c => c.totalCAD), 0);
-  combinations.forEach(c => { c.savingsVsWorst = +(c.totalCAD - best).toFixed(2); });
-
-  const validPrices = Object.values(cheapestPerItem);
-  const totalCAD = validPrices.reduce((s, p) => s + p.price, 0);
-
+  const total = cheapest.reduce((sum, p) => sum + p.price, 0);
   return {
-    combinations, budgetCAD: budgetAmt,
-    withinBudget: totalCAD <= budgetAmt,
-    overBy: Math.max(0, +(totalCAD - budgetAmt).toFixed(2)),
-    perItemPrices: validPrices,
-    saleItems: validPrices.filter(p => p.onSale).map(p => p.name),
-    priceNote: "Prices from Flipp weekly flyers + Google Shopping. Flyer prices are from actual store flyers this week. Always verify in-store."
+    combinations: combos,
+    budgetCAD: budgetAmt,
+    withinBudget: total <= budgetAmt,
+    overBy: Math.max(0, +(total - budgetAmt).toFixed(2)),
+    perItemPrices: cheapest,
+    saleItems: cheapest.filter(p => p.onSale).map(p => p.name),
+    priceNote: "Prices from physical Canadian grocery stores (Walmart, Loblaws, No Frills, Metro, Sobeys, FreshCo, Costco). Always verify in-store."
   };
 }
 
-// ── BUILD ANALYZE PROMPT ───────────────────────────────────────────
-function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "SEARCH RESULTS (Flipp flyers + Google Shopping + web):\n" + priceContext +
-    "\n\nFor each item, find its price in the results above." +
-    "\nItems: " + cleanedItems.join(", ") +
-    "\n\nRules:" +
-    "\n- Flipp results format: 'StoreName: ItemName - $X.XX at StoreName' — these are real flyer prices, use them" +
-    "\n- Shopping results format: 'StoreName: ItemName - $X.XX at StoreName'" +
-    "\n- Use the lowest price found for each item" +
-    "\n- store: exact store name (Walmart/No Frills/Metro/Loblaws/Costco/Sobeys/FreshCo/Food Basics)" +
-    "\n- If no price found, omit the item entirely" +
-    "\n- Return compact JSON only:\n" +
-    '{"perItemPrices":[{"name":"item","store":"Walmart","price":2.99,"onSale":false}]}';
+// ── SHOPPING SEARCH (physical stores only) ─────────────────────────
+async function shoppingSearch(item, serperKey) {
+  try {
+    const r = await fetch("https://google.serper.dev/shopping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-KEY": serperKey },
+      body: JSON.stringify({ q: item + " grocery store Canada", gl: "ca", hl: "en", num: 10 })
+    });
+    const data = await r.json();
+    return (data.shopping || [])
+      .filter(s => s.price && isPhysicalStore(s.source))
+      .map(s => ({
+        title: normalizeStore(s.source) + ": " + (s.title || item),
+        snippet: (s.title || item) + " - " + s.price + " at " + normalizeStore(s.source)
+      }));
+  } catch(e) { return []; }
+}
+
+// ── WEB SEARCH ─────────────────────────────────────────────────────
+async function webSearch(query, serperKey) {
+  try {
+    const r = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-KEY": serperKey },
+      body: JSON.stringify({ q: query, gl: "ca", hl: "en", num: 8 })
+    });
+    const data = await r.json();
+    const organic = (data.organic || []).slice(0, 8).map(r => ({ title: r.title || "", snippet: r.snippet || "" }));
+    const ab = data.answerBox ? [{ title: "Answer", snippet: data.answerBox.snippet || data.answerBox.answer || "" }] : [];
+    return [...ab, ...organic];
+  } catch(e) { return []; }
+}
+
+// ── GOOGLE PLACES ──────────────────────────────────────────────────
+async function getStoreAddress(storeName, city, placesKey) {
+  if (!placesKey) return null;
+  try {
+    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
+    const searchRes = await fetch("https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address&key=" + placesKey);
+    const searchData = await searchRes.json();
+    const candidate = searchData?.candidates?.[0];
+    if (!candidate) return null;
+    const detailRes = await fetch("https://maps.googleapis.com/maps/api/place/details/json?place_id=" + candidate.place_id + "&fields=opening_hours&key=" + placesKey);
+    const detailData = await detailRes.json();
+    const weekdayText = detailData?.result?.opening_hours?.weekday_text;
+    const today = new Date().getDay();
+    const todayHours = weekdayText?.[today === 0 ? 6 : today - 1];
+    const hours = todayHours ? todayHours.replace(/^[^:]+:\s*/, "") : null;
+    console.log("Places:", storeName, "->", candidate.formatted_address, hours);
+    return { address: candidate.formatted_address || null, hours };
+  } catch(e) { return null; }
 }
 
 // ── CLEAN ITEM NAME ────────────────────────────────────────────────
@@ -346,7 +388,7 @@ function cleanItemName(item) {
   return item
     .replace(/^\d+x?\s+/i, "")
     .replace(/^\d+\s*\/\s*\d+\s+/i, "")
-    .replace(/^[\d.]+\s*(cups?|tbsp|tsp|tablespoons?|teaspoons?|pounds?|lbs?|kg|g|oz|ml|l|liters?|litres?|slices?|cloves?|pieces?|cans?|boxes?|bags?|bunches?|heads?|stalks?|sheets?)\\s+/i, "")
+    .replace(/^[\d.]+\s*(cups?|tbsp|tsp|pounds?|lbs?|kg|g|oz|ml|l|slices?|cloves?|pieces?|cans?|bags?|heads?)\s+/i, "")
     .replace(/^(a|an|the)\s+/i, "")
     .trim();
 }
@@ -382,72 +424,9 @@ function getCity(p) {
   return m[p.slice(0,3)] || "Toronto";
 }
 
-// ── WEB SEARCH ─────────────────────────────────────────────────────
-async function webSearch(query, serperKey) {
-  try {
-    const r = await fetch("https://google.serper.dev/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-KEY": serperKey },
-      body: JSON.stringify({ q: query, gl: "ca", hl: "en", num: 8 })
-    });
-    const data = await r.json();
-    const organic = (data.organic || []).slice(0, 8).map(r => ({ title: r.title || "", snippet: r.snippet || "" }));
-    const ab = data.answerBox ? [{ title: "Answer", snippet: data.answerBox.snippet || data.answerBox.answer || "" }] : [];
-    return [...ab, ...organic];
-  } catch(e) { return []; }
-}
-
-// ── SHOPPING SEARCH ────────────────────────────────────────────────
-const KNOWN_STORES = ["Walmart","Loblaws","No Frills","Real Canadian Superstore","Metro","Sobeys","FreshCo","Food Basics","Costco","T&T","Farm Boy","Giant Tiger","Bulk Barn","Shoppers","Superstore"];
-
-async function shoppingSearch(item, serperKey) {
-  try {
-    const r = await fetch("https://google.serper.dev/shopping", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-API-KEY": serperKey },
-      body: JSON.stringify({ q: item + " Canada grocery store", gl: "ca", hl: "en", num: 10 })
-    });
-    const data = await r.json();
-    return (data.shopping || []).slice(0, 10)
-      .filter(s => s.price && s.source)
-      .map(s => {
-        // Normalize store name - check if source matches a known store
-        const srcLower = (s.source || "").toLowerCase();
-        const knownStore = KNOWN_STORES.find(st => srcLower.includes(st.toLowerCase()));
-        const storeName = knownStore || s.source;
-        return {
-          title: storeName + ": " + (s.title || item),
-          snippet: (s.title || item) + " - " + s.price + " at " + storeName
-        };
-      });
-  } catch(e) { return []; }
-}
-
-// ── GOOGLE PLACES ──────────────────────────────────────────────────
-async function getStoreAddress(storeName, city, placesKey) {
-  if (!placesKey) return null;
-  try {
-    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
-    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address&key=" + placesKey;
-    const [searchRes] = await Promise.all([fetch(searchUrl)]);
-    const searchData = await searchRes.json();
-    const candidate = searchData?.candidates?.[0];
-    if (!candidate) return null;
-    // Get hours
-    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + candidate.place_id + "&fields=opening_hours&key=" + placesKey;
-    const detailRes = await fetch(detailUrl);
-    const detailData = await detailRes.json();
-    const weekdayText = detailData?.result?.opening_hours?.weekday_text;
-    const today = new Date().getDay();
-    const todayHours = weekdayText ? weekdayText[today === 0 ? 6 : today - 1] : null;
-    const hours = todayHours ? todayHours.replace(/^[^:]+:\s*/, "") : null;
-    return { address: candidate.formatted_address || null, hours };
-  } catch(e) { return null; }
-}
-
 // ── AI PROVIDERS ───────────────────────────────────────────────────
 async function callGroq(system, prompt, apiKey, maxTokens, fast) {
-  const models = fast ? ["llama-3.1-8b-instant", "gemma2-9b-it"] : ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  const models = fast ? ["llama-3.1-8b-instant","gemma2-9b-it"] : ["llama-3.3-70b-versatile","llama-3.1-8b-instant"];
   for (const model of models) {
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -464,8 +443,7 @@ async function callGroq(system, prompt, apiKey, maxTokens, fast) {
 
 async function callGemini(system, prompt, apiKey, maxTokens) {
   const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens } }),
   });
   const data = await r.json();
@@ -496,7 +474,7 @@ async function callOpenRouter(system, prompt, maxTokens) {
     const data = await r.json();
     if (data.error) { console.error("OpenRouter:", data.error.message); return null; }
     return data?.choices?.[0]?.message?.content ?? null;
-  } catch (e) { return null; }
+  } catch(e) { return null; }
 }
 
 async function callMistral(system, prompt, maxTokens) {
@@ -514,7 +492,7 @@ async function callMistral(system, prompt, maxTokens) {
     const data = await r.json();
     if (data.error) { console.error("Mistral error:", JSON.stringify(data.error)); return null; }
     return data?.choices?.[0]?.message?.content ?? null;
-  } catch (e) { console.error("Mistral timeout/error:", e.message); return null; }
+  } catch(e) { console.error("Mistral timeout/error:", e.message); return null; }
 }
 
 async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
@@ -533,7 +511,7 @@ async function callAI(system, prompt, groqKey, geminiKey, maxTokens, fast) {
       const val = await fn();
       if (val && val.trim() !== "") return val;
       console.log(name + ": returned empty, trying next provider");
-    } catch (err) { console.error(name + " failed:", err.message); }
+    } catch(err) { console.error(name + " failed:", err.message); }
   }
   throw new Error("All AI providers unavailable. Please try again in a few minutes.");
 }
