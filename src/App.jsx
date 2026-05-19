@@ -148,6 +148,7 @@ export default function App() {
   const [selectedDish, setSelectedDish] = useState(null);
   const [haveIngredients, setHaveIngredients] = useState({});
   const [dishError, setDishError] = useState("");
+  const [dishDetailsLoading, setDishDetailsLoading] = useState(false);
   const [listId, setListId] = useState(null);
   const [activeMealCat, setActiveMealCat] = useState("All");
   // Receipt scan
@@ -496,9 +497,11 @@ export default function App() {
   const openDish = async (dish) => {
     setSelectedDish(dish); // show immediately with basic info
     setScreen("dishDetail");
+    setDishDetailsLoading(true);
     // Load full details (nutrition, ingredients, steps) in background
     const full = await loadDishDetails(dish);
     setSelectedDish(full);
+    setDishDetailsLoading(false);
     // Auto-check ingredients already on the grocery list
     const autoChecked = {};
     if (full.ingredients) {
@@ -1086,6 +1089,12 @@ export default function App() {
                   <div className="card" style={{ padding:16, marginBottom:16, background:"#fef9f0", border:"1px solid #f0e0b0" }}>
                     <p className="section-label" style={{ color:"#d4870a" }}>💡 Chef's Tips</p>
                     {selectedDish.tips.map((tip, i) => <p key={i} style={{ fontSize:13, color:"#7a7060", marginBottom:i<selectedDish.tips.length-1?8:0, paddingLeft:12, borderLeft:"2px solid #d4870a" }}>{tip}</p>)}
+                  </div>
+                )}
+                {dishDetailsLoading && (
+                  <div style={{ textAlign:"center", padding:"24px", color:"#7a7060", fontSize:14 }}>
+                    <div style={{ fontSize:28, marginBottom:8 }}>⏳</div>
+                    Loading ingredients, nutrition & instructions...
                   </div>
                 )}
                 <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
