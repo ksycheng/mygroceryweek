@@ -23,7 +23,7 @@ export default async function handler(req, res) {
         Promise.all(cleanedItems.map(item => Promise.all([
           flippSearch(item, postalClean),           // Primary: real flyer prices
           shoppingSearch(item, serperKey),           // Fallback: Google Shopping
-          webSearch(item + ' price canada grocery 2025', serperKey), // Last resort
+          webSearch(item + ' price walmart.ca OR nofrills.ca OR metro.ca canada', serperKey),
         ]))),
         Promise.all([
           webSearch('Walmart Loblaws "No Frills" "Real Canadian Superstore" grocery store ' + city + ' Ontario address hours', serperKey),
@@ -185,25 +185,32 @@ export default async function handler(req, res) {
 // Flipp aggregates real weekly flyers from all major Canadian grocery chains
 async function flippSearch(item, postal) {
   try {
-    const url = "https://backflipp.wishabi.com/flipp/items/search?locale=en-ca&postal_code=" + postal + "&q=" + encodeURIComponent(item);
+    // Flipp API - aggregates real weekly flyers from all major Canadian grocery chains
+    // postal should be formatted like "L6C0L6" (no space)
+    const postalFormatted = postal.replace(/\s/g, "").toUpperCase();
+    const url = "https://backflipp.wishabi.com/flipp/items/search?locale=en-ca&postal_code=" + postalFormatted + "&q=" + encodeURIComponent(item);
     const r = await fetch(url, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; MyGroceryWeek/1.0)"
-      }
+      headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
     });
-    if (!r.ok) { console.log("Flipp HTTP error:", r.status, "for", item); return []; }
+    if (!r.ok) {
+      const body = await r.text();
+      console.log("Flipp error", r.status, "for", item, ":", body.substring(0, 100));
+      return [];
+    }
     const data = await r.json();
-    const flippItems = (data.items || []).slice(0, 8);
-    if (flippItems.length === 0) { console.log("Flipp: no results for", item); return []; }
-    return flippItems.map(fi => ({
-      title: (fi.merchant || "Store") + ": " + (fi.name || item),
-      snippet: (fi.name || item) + " - $" + (fi.current_price || fi.sale_price || "?") +
-        " at " + (fi.merchant || "store") +
-        (fi.valid_to ? " (sale ends " + fi.valid_to.substring(0,10) + ")" : "") +
-        (fi.pre_price ? " (was $" + fi.pre_price + ")" : "")
-    }));
-  } catch(e) { console.log("Flipp error for", item, ":", e.message); return []; }
+    const flippItems = (data.items || data || []).slice(0, 8);
+    if (flippItems.length === 0) { console.log("Flipp: 0 results for:", item); return []; }
+    console.log("Flipp found", flippItems.length, "for", item, "- first:", flippItems[0]?.name, "@", flippItems[0]?.merchant, "$", flippItems[0]?.current_price);
+    return flippItems
+      .filter(fi => fi.current_price || fi.sale_price)
+      .map(fi => ({
+        title: (fi.merchant || "Store") + ": " + (fi.name || item),
+        snippet: (fi.name || item) + " - $" + (fi.current_price || fi.sale_price) +
+          " at " + (fi.merchant || "store") +
+          (fi.valid_to ? " (sale ends " + fi.valid_to.substring(0,10) + ")" : "") +
+          (fi.pre_price ? " (was $" + fi.pre_price + ")" : "")
+      }));
+  } catch(e) { console.log("Flipp exception for", item, ":", e.message); return []; }
 }
 
 // ── HELPER: extract price items from AI response ───────────────────
@@ -236,13 +243,26 @@ async function buildResult(allPrices, city, budgetAmt, postal) {
   const placesKey = process.env.GOOGLE_PLACES_KEY;
 
   // Cheapest price per item - use case-insensitive matching
-  const itemNames = [...new Set(allPrices.map(p => p.name.toLowerCase()))];
+  // Filter out bogus store names before deduplication
+  const validPriceEntries = allPrices.filter(p => {
+    if (!p.name || !p.store || !p.price) return false;
+    const storeLower = p.store.toLowerCase();
+    // Reject if store name looks like a product or brand, not a grocery chain
+    if (storeLower === "store" || storeLower === "unknown") return false;
+    if (p.store.length > 30) return false; // Too long to be a store name
+    if (p.store === p.name) return false;  // Store name same as item = wrong
+    if (p.store.toUpperCase() === p.store && p.store.length > 10) return false; // ALL CAPS product name
+    return true;
+  });
+  console.log("Valid prices after filter:", validPriceEntries.length, "of", allPrices.length);
+
+  const itemNames = [...new Set(validPriceEntries.map(p => p.name.toLowerCase()))];
   const cheapestPerItem = {};
   itemNames.forEach(nameLower => {
-    const options = allPrices.filter(p => p.name.toLowerCase() === nameLower);
+    const options = validPriceEntries.filter(p => p.name.toLowerCase() === nameLower);
     if (options.length > 0) {
       const best = options.reduce((best, p) => p.price < best.price ? p : best);
-      cheapestPerItem[nameLower] = best;
+      cheapestPerItem[nameLower] = { ...best, name: best.name }; // preserve original case
     }
   });
   console.log("Cheapest per item:", Object.keys(cheapestPerItem).length, "items:", Object.keys(cheapestPerItem).join(", "));
@@ -378,20 +398,28 @@ async function webSearch(query, serperKey) {
 }
 
 // ── SHOPPING SEARCH ────────────────────────────────────────────────
+const KNOWN_STORES = ["Walmart","Loblaws","No Frills","Real Canadian Superstore","Metro","Sobeys","FreshCo","Food Basics","Costco","T&T","Farm Boy","Giant Tiger","Bulk Barn","Shoppers","Superstore"];
+
 async function shoppingSearch(item, serperKey) {
   try {
     const r = await fetch("https://google.serper.dev/shopping", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-KEY": serperKey },
-      body: JSON.stringify({ q: item + " grocery Canada", gl: "ca", hl: "en", num: 10 })
+      body: JSON.stringify({ q: item + " Canada grocery store", gl: "ca", hl: "en", num: 10 })
     });
     const data = await r.json();
     return (data.shopping || []).slice(0, 10)
-      .filter(s => s.price)
-      .map(s => ({
-        title: (s.source || "Store") + ": " + (s.title || item),
-        snippet: (s.title || item) + " - " + s.price + " at " + (s.source || "store")
-      }));
+      .filter(s => s.price && s.source)
+      .map(s => {
+        // Normalize store name - check if source matches a known store
+        const srcLower = (s.source || "").toLowerCase();
+        const knownStore = KNOWN_STORES.find(st => srcLower.includes(st.toLowerCase()));
+        const storeName = knownStore || s.source;
+        return {
+          title: storeName + ": " + (s.title || item),
+          snippet: (s.title || item) + " - " + s.price + " at " + storeName
+        };
+      });
   } catch(e) { return []; }
 }
 
