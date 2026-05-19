@@ -477,22 +477,23 @@ export default function App() {
   };
 
   const loadDishDetails = async (dish) => {
-    if (dish.steps && dish.steps.length > 0) return dish;
+    if (dish.steps && dish.steps.length > 0) return dish; // already have details
     try {
-      const people = profile?.people || 2;
-      const system = "You are a chef. Return ONLY valid JSON, no markdown, no extra text.";
-      const prompt = 'Full recipe for "' + dish.name + '" serving ' + people + ' people. Return ONLY this JSON structure with no omissions: {"nutrition":{"calories":"350 kcal","protein":"15g","carbs":"40g","fat":"10g"},"tips":["Tip one","Tip two"],"ingredients":[{"name":"ingredient","amount":"1","unit":"cup","notes":"optional note"}],"steps":[{"title":"Step title","detail":"Detailed instruction here."}]}. Include ALL ingredients needed and 5-8 clear steps.';
+      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
+      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
       const text = await callAI(system, prompt);
       if (!text) return dish;
-      const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
+      const clean = text.replace(/```json|```/g, "").trim();
       const match = clean.match(/\{[\s\S]*\}/);
       if (!match) return dish;
       const details = JSON.parse(match[0]);
       return { ...dish, ...details };
-    } catch(e) { console.error("loadDishDetails:", e.message); return dish; }
+    } catch(e) {
+      console.error("loadDishDetails:", e.message);
+      return dish;
+    }
   };
 
-  
   const openDish = async (dish) => {
     setSelectedDish(dish); // show immediately with basic info
     setScreen("dishDetail");
@@ -880,7 +881,7 @@ export default function App() {
             </div>
           )}
           <div style={{ display:"flex", overflowX:"auto" }}>
-            {[["list","📋 List" + (items.length ? " ("+items.length+")" : "")],["meals","🍽️ Meals"],["compare","📊 Compare"],["wishlist","⭐ Wishlist"],["history","📈 History"]].map(([t,l]) => (
+            {[["list","📋 List" + (items.length ? " ("+items.length+")" : "")],["meals","🍽️ Meals"],["compare","📊 Compare"],["wishlist","⭐ Wishlist"],["history","📈 History"],["family","👨‍👩‍👧 Family" + (householdMembers.length > 0 ? " ("+householdMembers.length+")" : "")]].map(([t,l]) => (
               <button key={t} onClick={() => setTab(t)} style={{ flex:"0 0 auto", background:"none", border:"none", padding:"10px 14px", fontSize:12, fontWeight:600, color:tab===t?"#e8f5e0":"#6a8a5a", borderBottom:tab===t?"2px solid #e8f5e0":"2px solid transparent", cursor:"pointer", transition:"all 0.18s", whiteSpace:"nowrap" }}>{l}</button>
             ))}
           </div>
@@ -1058,7 +1059,7 @@ export default function App() {
                       </div>
                       <div style={{ background:"#f7f4ef", borderRadius:10, padding:10, textAlign:"center" }}>
                         <div style={{ fontSize:18 }}>👥</div>
-                        <div style={{ fontSize:13, fontWeight:600, color:"#2d5a1b" }}>{selectedDish.servings} people</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:"#2d5a1b" }}>{selectedDish.servings}</div>
                         <div style={{ fontSize:10, color:"#aaa" }}>Servings</div>
                       </div>
                       <div style={{ background:"#f7f4ef", borderRadius:10, padding:10, textAlign:"center" }}>
@@ -1419,6 +1420,103 @@ export default function App() {
           </div>
         )}
 
+        {/* FAMILY TAB */}
+        {tab === "family" && (
+          <div>
+            {!household ? (
+              <div className="card" style={{ padding:24, textAlign:"center" }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>🏠</div>
+                <h3 style={{ fontFamily:"'DM Serif Display',serif", fontSize:20, color:"#2d5a1b", marginBottom:8 }}>Create a Family Household</h3>
+                <p style={{ fontSize:14, color:"#7a7060", marginBottom:20 }}>Invite family members to share and sync your grocery list in real time.</p>
+                <button onClick={createHousehold} className="btn-primary" style={{ width:"100%" }}>Create Family Household</button>
+              </div>
+            ) : (
+              <div>
+                {/* Household info */}
+                <div className="card" style={{ padding:16, marginBottom:12, background:"#e8f5e0", border:"1px solid #b8dba0" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                    <span style={{ fontSize:36 }}>🏠</span>
+                    <div>
+                      <p style={{ fontSize:16, fontWeight:700, color:"#2d5a1b", margin:0 }}>{household.name}</p>
+                      <p style={{ fontSize:12, color:"#5a8a40", margin:"2px 0 0" }}>📡 Grocery list syncs in real time for all members</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Members list */}
+                <div className="card" style={{ padding:16, marginBottom:12 }}>
+                  <p className="section-label" style={{ marginBottom:12 }}>Members ({householdMembers.length + 1})</p>
+                  {/* Owner */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px", borderRadius:12, background:"#e8f5e0", border:"1px solid #b8dba0", marginBottom:8 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:36, height:36, borderRadius:99, background:"#2d5a1b", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>👑</div>
+                      <div>
+                        <p style={{ fontSize:14, fontWeight:700, color:"#2d5a1b", margin:0 }}>{profile?.name || "You"}</p>
+                        <p style={{ fontSize:11, color:"#5a8a40", margin:0 }}>Owner · You</p>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Members */}
+                  {householdMembers.length === 0 ? (
+                    <p style={{ fontSize:13, color:"#aaa", textAlign:"center", padding:"12px 0" }}>No members yet. Invite family below!</p>
+                  ) : householdMembers.map((m, i) => (
+                    <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px", borderRadius:12, background:"#f7f4ef", border:"1px solid #e2dbd0", marginBottom:8 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ width:36, height:36, borderRadius:99, background:"#e2dbd0", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>👤</div>
+                        <div>
+                          <p style={{ fontSize:14, fontWeight:600, color:"#1a1a1a", margin:0 }}>{m.profiles?.name || "Family Member"}</p>
+                          <p style={{ fontSize:11, color:"#aaa", margin:0 }}>Member · Joined</p>
+                        </div>
+                      </div>
+                      {household?.owner_id === user?.id && (
+                        <button onClick={async () => {
+                          if (window.confirm("Remove " + (m.profiles?.name || "this member") + " from the family?")) {
+                            await supabase.from("household_members").delete().eq("id", m.id);
+                            loadHouseholdMembers(household.id);
+                          }
+                        }} style={{ background:"none", border:"1px solid #f5c0c0", borderRadius:8, padding:"6px 12px", fontSize:12, color:"#c0392b", cursor:"pointer", fontWeight:600 }}>Remove</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Invite section */}
+                {household?.owner_id === user?.id && (
+                  <div className="card" style={{ padding:16 }}>
+                    <p className="section-label" style={{ marginBottom:10 }}>Invite Family Member</p>
+                    <p style={{ fontSize:13, color:"#7a7060", marginBottom:12 }}>They'll receive an invite when they log in to MyGroceryWeek.</p>
+                    <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                      <input className="input" placeholder="Enter email address..." value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && inviteFamilyMember()} />
+                      <button onClick={inviteFamilyMember} disabled={!inviteEmail} className="btn-primary" style={{ whiteSpace:"nowrap", padding:"11px 16px" }}>Invite</button>
+                    </div>
+                    {inviteStatus === "sent" && <div style={{ background:"#e8f5e0", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#2d5a1b", fontWeight:600 }}>✅ Invite sent!</div>}
+                    {inviteStatus === "error" && <div style={{ background:"#fde8e8", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#c0392b" }}>❌ Could not send invite. Try again.</div>}
+                  </div>
+                )}
+
+                {/* Grocery list activity - who added/checked what */}
+                {items.some(i => i.addedBy || i.crossedBy) && (
+                  <div className="card" style={{ padding:16, marginTop:12 }}>
+                    <p className="section-label" style={{ marginBottom:12 }}>Recent Activity</p>
+                    {items.filter(i => i.addedBy || i.crossedBy).slice(0, 10).map((item, i) => (
+                      <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid #f5f0e8" }}>
+                        <span style={{ fontSize:16 }}>{checked[item.id] ? "✅" : "🛒"}</span>
+                        <div style={{ flex:1 }}>
+                          <span style={{ fontSize:13, fontWeight:500, color: checked[item.id] ? "#aaa" : "#1a1a1a", textDecoration: checked[item.id] ? "line-through" : "none" }}>{item.name}</span>
+                          <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>
+                            {item.addedBy && <span>Added by <strong style={{ color:"#7a7060" }}>{item.addedBy}</strong></span>}
+                            {item.crossedBy && checked[item.id] && <span> · Crossed by <strong style={{ color:"#7a7060" }}>{item.crossedBy}</strong></span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -1433,15 +1531,17 @@ function DishCard({ dish, onClick, saleItems = [], favourites = [], onToggleFavo
   const isFavourite = favourites.some(f => f.name === dish.name);
   return (
     <div className="dish-card" style={{ marginBottom:12, border: hasSale ? "2px solid #3d8c23" : "1px solid var(--border)", position:"relative" }}>
-      {onToggleFavourite && (
-        <button onClick={e => { e.stopPropagation(); onToggleFavourite(dish); }} style={{ position:"absolute", top:10, right:10, background:"none", border:"none", fontSize:22, cursor:"pointer", zIndex:2, filter: isFavourite ? "none" : "grayscale(1) opacity(0.4)" }} title={isFavourite ? "Remove from favourites" : "Add to favourites"}>❤️</button>
-      )}
       <div style={{ display:"flex", alignItems:"center" }} onClick={onClick}>
-        <div style={{ width:80, height:80, display:"flex", alignItems:"center", justifyContent:"center", fontSize:40, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)", flexShrink:0 }}>{dish.emoji}</div>
-        <div style={{ padding:"12px 16px", flex:1, minWidth:0 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-            <h3 style={{ fontSize:15, fontWeight:600, color:"#1a1a1a", margin:0 }}>{dish.name}</h3>
-            <span style={{ fontSize:11, fontWeight:600, color:DIFFICULTY_COLOR[dish.difficulty]||"#666", flexShrink:0, marginLeft:8 }}>{dish.difficulty}</span>
+        <div style={{ width:80, height:80, display:"flex", alignItems:"center", justifyContent:"center", fontSize:44, background:"linear-gradient(135deg,#f7f4ef,#e8f5e0)", flexShrink:0, borderRadius:"14px 0 0 14px" }}>{dish.emoji}</div>
+        <div style={{ padding:"10px 12px", flex:1, minWidth:0 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:2 }}>
+            <h3 style={{ fontSize:14, fontWeight:600, color:"#1a1a1a", margin:0, flex:1, marginRight:8 }}>{dish.name}</h3>
+            <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+              <span style={{ fontSize:10, fontWeight:700, color:DIFFICULTY_COLOR[dish.difficulty]||"#666", background:"#f7f4ef", padding:"2px 8px", borderRadius:99 }}>{dish.difficulty}</span>
+              {onToggleFavourite && (
+                <button onClick={e => { e.stopPropagation(); onToggleFavourite(dish); }} style={{ background:"none", border:"none", fontSize:18, cursor:"pointer", lineHeight:1, filter: isFavourite ? "none" : "grayscale(1) opacity(0.4)", padding:0 }} title={isFavourite ? "Remove from favourites" : "Add to favourites"}>❤️</button>
+              )}
+            </div>
           </div>
           <p style={{ fontSize:12, color:"#7a7060", margin:"3px 0 6px", lineHeight:1.4 }}>{dish.description}</p>
           {hasSale && (
@@ -1451,7 +1551,7 @@ function DishCard({ dish, onClick, saleItems = [], favourites = [], onToggleFavo
           )}
           <div style={{ display:"flex", gap:8, flexWrap:"wrap", fontSize:11, color:"#aaa" }}>
             <span>⏱ {dish.totalTime||dish.cookTime}</span>
-            <span>👥 {dish.servings}</span>
+            <span>👥 {dish.servings} servings</span>
             {dish.costPerPersonCAD && <span style={{ background:"#e8f5e0", color:"#2d5a1b", padding:"1px 7px", borderRadius:99, fontWeight:600 }}>${dish.costPerPersonCAD?.toFixed(2)}/person</span>}
             <span style={{ background:meta.bg, color:meta.color, padding:"1px 7px", borderRadius:99, fontWeight:600 }}>{meta.icon} {dish.mealCategory}</span>
           </div>
