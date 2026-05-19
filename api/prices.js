@@ -61,29 +61,29 @@ export default async function handler(req, res) {
 
       // Batch 4 items at a time — keeps each AI call small enough for free tier limits
       const BATCH = 4;
-      const allPrices = []; // collect ALL price entries across all batches
+      const batches = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH) {
-        const batchItems = cleanedItems.slice(i, i + BATCH);
-        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
-        console.log("Analyzing batch " + (i/BATCH+1) + ":", batchItems.join(", "));
+        batches.push(cleanedItems.slice(i, i + BATCH));
+      }
+      console.log("Running", batches.length, "batches in parallel for", cleanedItems.length, "items");
+      const batchResults = await Promise.all(batches.map(async (batchItems, batchIdx) => {
+        const priceContext = batchItems.map(item => "=== " + item + "===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
         try {
           const aiResponse = await callAI(
             "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
-            groqKey, geminiKey, 2048
+            groqKey, geminiKey, 1500
           );
-          if (aiResponse) {
-            const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-            const match = clean.match(/\{[\s\S]*\}/);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              (parsed.perItemPrices || []).forEach(p => {
-                if (p.name && p.store && p.price && p.price > 0) allPrices.push(p);
-              });
-            }
-          }
-        } catch(e) { console.error("Batch " + i + " error:", e.message); }
-      }
+          if (!aiResponse) return [];
+          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          const match = clean.match(/\{[\s\S]*\}/);
+          if (!match) return [];
+          const parsed = JSON.parse(match[0]);
+          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price && p.price > 0);
+        } catch(e) { console.error("Batch", batchIdx, "error:", e.message); return []; }
+      }));
+      const allPrices = batchResults.flat();
+      console.log("Total prices found:", allPrices.length);
 
       // For each item pick the cheapest price found across all stores
       const itemNames = [...new Set(allPrices.map(p => p.name))];
@@ -263,28 +263,29 @@ export default async function handler(req, res) {
 
       // Batch 4 items at a time — keeps each AI call small enough for free tier limits
       const BATCH_P = 4;
-      const allPricesP = [];
+      const batchesP = [];
       for (let i = 0; i < cleanedItems.length; i += BATCH_P) {
-        const batchItems = cleanedItems.slice(i, i + BATCH_P);
-        const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
+        batchesP.push(cleanedItems.slice(i, i + BATCH_P));
+      }
+      console.log("Running", batchesP.length, "batches in parallel for", cleanedItems.length, "items");
+      const batchResultsP = await Promise.all(batchesP.map(async (batchItems, batchIdx) => {
+        const priceContext = batchItems.map(item => "=== " + item + "===\n" + (itemSnippets[item] || "No results found")).join("\n\n");
         try {
           const aiResponse = await callAI(
             "You are a Canadian grocery price extractor. Extract ONLY prices explicitly stated in the search snippets. NEVER guess or invent prices. Return ONLY valid JSON, no markdown.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
-            groqKey, geminiKey, 2048
+            groqKey, geminiKey, 1500
           );
-          if (aiResponse) {
-            const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
-            const match = clean.match(/\{[\s\S]*\}/);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              (parsed.perItemPrices || []).forEach(p => {
-                if (p.name && p.store && p.price && p.price > 0) allPricesP.push(p);
-              });
-            }
-          }
-        } catch(e) { console.error("Prices batch " + i + " error:", e.message); }
-      }
+          if (!aiResponse) return [];
+          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          const match = clean.match(/\{[\s\S]*\}/);
+          if (!match) return [];
+          const parsed = JSON.parse(match[0]);
+          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price && p.price > 0);
+        } catch(e) { console.error("Batch", batchIdx, "error:", e.message); return []; }
+      }));
+      const allPricesP = batchResultsP.flat();
+      console.log("Total prices found:", allPricesP.length);
 
       const itemNamesP = [...new Set(allPricesP.map(p => p.name))];
       const cheapestPerItemP = {};
