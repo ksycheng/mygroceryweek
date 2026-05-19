@@ -498,8 +498,7 @@ Return ONLY this exact JSON structure with real values filled in:
 Include ALL real ingredients needed and at least 5 steps with clear detail. No placeholders.`;
       const text = await callAI(system, prompt);
       if (!text) { console.error("loadDishDetails: empty response"); return dish; }
-      const clean = text.replace(/```json|```/g, "").replace(/
-/g, " ").trim();
+      const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
       const match = clean.match(/\{[\s\S]*\}/);
       if (!match) { console.error("loadDishDetails: no JSON found in:", clean.slice(0,200)); return dish; }
       const details = JSON.parse(match[0]);
