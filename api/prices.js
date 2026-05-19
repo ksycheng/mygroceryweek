@@ -547,16 +547,27 @@ async function callOpenRouter(system, prompt, maxTokens) {
 async function getStoreAddress(storeName, city, placesKey) {
   if (!placesKey) return null;
   try {
-    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
-    const r = await fetch("https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=formatted_address,opening_hours,name&key=" + placesKey);
-    const data = await r.json();
-    const place = data?.candidates?.[0];
-    if (!place) return null;
-    return {
-      address: place.formatted_address || null,
-      hours: place.opening_hours?.weekday_text?.join(", ") || null
-    };
-  } catch(e) { return null; }
+    // Step 1: Find the place and get its place_id
+    const query = encodeURIComponent(storeName + " grocery " + city + " Ontario Canada");
+    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address,name&key=" + placesKey;
+    const searchRes = await fetch(searchUrl);
+    const searchData = await searchRes.json();
+    const candidate = searchData?.candidates?.[0];
+    if (!candidate) { console.log("Places: no candidate for", storeName); return null; }
+
+    // Step 2: Get place details including opening hours
+    const placeId = candidate.place_id;
+    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + placeId + "&fields=formatted_address,opening_hours&key=" + placesKey;
+    const detailRes = await fetch(detailUrl);
+    const detailData = await detailRes.json();
+    const details = detailData?.result;
+
+    const address = details?.formatted_address || candidate.formatted_address || null;
+    const weekdayText = details?.opening_hours?.weekday_text;
+    const hours = weekdayText ? weekdayText.join(" | ") : null;
+    console.log("Places found:", storeName, "->", address);
+    return { address, hours };
+  } catch(e) { console.error("Places error:", e.message); return null; }
 }
 
 async function callMistral(system, prompt, maxTokens) {
