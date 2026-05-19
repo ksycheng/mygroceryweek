@@ -97,9 +97,19 @@ export default async function handler(req, res) {
       const storeInfo = {}; // store name -> { address, hours }
       allPrices.forEach(p => {
         if (p.store && !storeInfo[p.store]) {
-          storeInfo[p.store] = { address: p.address || (city + ", ON"), hours: p.hours || null };
+          storeInfo[p.store] = { address: p.address || null, hours: p.hours || null };
         }
       });
+
+      // Enrich store addresses using Google Places API
+      const placesKey = process.env.GOOGLE_PLACES_KEY;
+      await Promise.all(Object.keys(storeInfo).map(async store => {
+        if (!storeInfo[store].address) {
+          const place = await getStoreAddress(store, city, placesKey);
+          if (place) { storeInfo[store].address = place.address; storeInfo[store].hours = place.hours; }
+        }
+        if (!storeInfo[store].address) storeInfo[store].address = city + ", ON";
+      }));
 
       // Group cheapest items by store
       const storeGroups = {};
@@ -156,7 +166,7 @@ export default async function handler(req, res) {
             const combo2total = combo1.totalCAD + s2items.reduce((s, p) => s + p.price, 0);
             // Only show if it covers more items (not necessarily cheaper since store 1 already has cheapest)
             const combo2 = {
-              rank: 2, label: "Best two stores",
+              rank: 2, label: "More items (2 stores)",
               stores: [
                 { name: s1.store, address: (storeInfo[s1.store] || {}).address || (city + ", ON"), hours: (storeInfo[s1.store] || {}).hours || null },
                 { name: storeList[1].store, address: (storeInfo[storeList[1].store] || {}).address || (city + ", ON"), hours: (storeInfo[storeList[1].store] || {}).hours || null }
@@ -167,7 +177,7 @@ export default async function handler(req, res) {
                 { store: s1.store, items: s1.items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s1.items.reduce((s,p)=>s+p.price,0).toFixed(2) },
                 { store: storeList[1].store, items: s2items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s2items.reduce((s,p)=>s+p.price,0).toFixed(2) }
               ],
-              tip: "Split your shop to cover items cheapest at each store."
+              tip: "Covers more items across two stores — not necessarily cheaper overall."
             };
             results.push(combo2);
           }
@@ -179,7 +189,7 @@ export default async function handler(req, res) {
           if (s3items.length > 0 && results.length >= 2) {
             const combo3total = results[1].totalCAD + s3items.reduce((s, p) => s + p.price, 0);
             const combo3 = {
-              rank: 3, label: "Best three stores",
+              rank: 3, label: "Most coverage (3 stores)",
               stores: [
                 ...results[1].stores,
                 { name: storeList[2].store, address: (storeInfo[storeList[2].store] || {}).address || (city + ", ON"), hours: (storeInfo[storeList[2].store] || {}).hours || null }
@@ -190,15 +200,16 @@ export default async function handler(req, res) {
                 ...results[1].breakdown,
                 { store: storeList[2].store, items: s3items.map(p => p.name + " - $" + p.price.toFixed(2)), subtotal: +s3items.reduce((s,p)=>s+p.price,0).toFixed(2) }
               ],
-              tip: "Maximum savings by visiting three stores."
+              tip: "Maximum item coverage across three stores — most trips required."
             };
             results.push(combo3);
           }
         }
 
-        // Calculate savings vs worst (single store) for each combo
-        const worst = results[results.length - 1]?.totalCAD || results[0].totalCAD;
-        results.forEach(c => { c.savingsVsWorst = +(Math.abs(worst - c.totalCAD)).toFixed(2); });
+        // savingsVsWorst = how much cheaper vs the most expensive combo shown
+        const worst = Math.max(...results.map(c => c.totalCAD));
+        const best = Math.min(...results.map(c => c.totalCAD));
+        results.forEach(c => { c.savingsVsWorst = +(c.totalCAD - best).toFixed(2); });
         return results;
       };
 
@@ -317,7 +328,7 @@ export default async function handler(req, res) {
         if (sortedStoresP.length >= 2 && sortedStoresP[1][1].length > 0) {
           const s2P = sortedStoresP[1];
           const c2 = {
-            rank: 2, label: "Best two stores",
+            rank: 2, label: "More items (2 stores)",
             stores: [
               { name: s1P[0], address: (storeInfoP[s1P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s1P[0]]||{}).hours||null },
               { name: s2P[0], address: (storeInfoP[s2P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s2P[0]]||{}).hours||null }
@@ -328,18 +339,18 @@ export default async function handler(req, res) {
               { store: s1P[0], items: s1P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s1P[1].reduce((s,p)=>s+p.price,0).toFixed(2) },
               { store: s2P[0], items: s2P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s2P[1].reduce((s,p)=>s+p.price,0).toFixed(2) }
             ],
-            tip: "Split your shop to cover items cheapest at each store."
+            tip: "Covers more items across two stores — not necessarily cheaper overall."
           };
           combinationsP.push(c2);
           if (sortedStoresP.length >= 3 && sortedStoresP[2][1].length > 0) {
             const s3P = sortedStoresP[2];
             combinationsP.push({
-              rank: 3, label: "Best three stores",
+              rank: 3, label: "Most coverage (3 stores)",
               stores: [...c2.stores, { name: s3P[0], address: (storeInfoP[s3P[0]]||{}).address||(city+", ON"), hours: (storeInfoP[s3P[0]]||{}).hours||null }],
               totalCAD: +(c2.totalCAD + s3P[1].reduce((s,p)=>s+p.price,0)).toFixed(2),
               savingsVsWorst: 0, trips: 3,
               breakdown: [...c2.breakdown, { store: s3P[0], items: s3P[1].map(p=>p.name+" - $"+p.price.toFixed(2)), subtotal: +s3P[1].reduce((s,p)=>s+p.price,0).toFixed(2) }],
-              tip: "Maximum item coverage across three stores."
+              tip: "Maximum item coverage across three stores — most trips required."
             });
           }
         }
@@ -531,6 +542,21 @@ async function callOpenRouter(system, prompt, maxTokens) {
     if (data.error) { console.error("OpenRouter:", data.error.message); return null; }
     return data?.choices?.[0]?.message?.content ?? null;
   } catch (e) { return null; }
+}
+
+async function getStoreAddress(storeName, city, placesKey) {
+  if (!placesKey) return null;
+  try {
+    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
+    const r = await fetch("https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=formatted_address,opening_hours,name&key=" + placesKey);
+    const data = await r.json();
+    const place = data?.candidates?.[0];
+    if (!place) return null;
+    return {
+      address: place.formatted_address || null,
+      hours: place.opening_hours?.weekday_text?.join(", ") || null
+    };
+  } catch(e) { return null; }
 }
 
 async function callMistral(system, prompt, maxTokens) {
