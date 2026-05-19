@@ -74,10 +74,23 @@ export default async function handler(req, res) {
           );
           if (!aiResp) return [];
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          const m = clean.match(/\{[\s\S]*\}/);
-          if (!m) return [];
-          const parsed = JSON.parse(m[0]);
-          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
+          // Handle both {perItemPrices:[...]} and [{...}] formats
+          let items = [];
+          const objMatch = clean.match(/\{[\s\S]*\}/);
+          if (objMatch) {
+            try {
+              const parsed = JSON.parse(objMatch[0]);
+              items = parsed.perItemPrices || [];
+            } catch(e) { console.error("Batch", bi, "obj parse err:", e.message); }
+          }
+          if (items.length === 0) {
+            const arrMatch = clean.match(/\[[\s\S]*\]/);
+            if (arrMatch) {
+              try { items = JSON.parse(arrMatch[0]); } catch(e) {}
+            }
+          }
+          console.log("Batch", bi, "found", items.length, "prices");
+          return items.filter(p => p.name && p.store && p.store !== "store" && p.price > 0);
         } catch(e) { console.error("Batch", bi, "err:", e.message); return []; }
       }));
       const allPrices = batchResults.flat();
@@ -272,10 +285,21 @@ export default async function handler(req, res) {
           );
           if (!aiResp) return [];
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          const m = clean.match(/\{[\s\S]*\}/);
-          if (!m) return [];
-          const parsed = JSON.parse(m[0]);
-          return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
+          let items = [];
+          const objMatch = clean.match(/\{[\s\S]*\}/);
+          if (objMatch) {
+            try {
+              const parsed = JSON.parse(objMatch[0]);
+              items = parsed.perItemPrices || [];
+            } catch(e) {}
+          }
+          if (items.length === 0) {
+            const arrMatch = clean.match(/\[[\s\S]*\]/);
+            if (arrMatch) {
+              try { items = JSON.parse(arrMatch[0]); } catch(e) {}
+            }
+          }
+          return items.filter(p => p.name && p.store && p.store !== "store" && p.price > 0);
         } catch(e) { console.error("PricesBatch", bi, "err:", e.message); return []; }
       }));
       const allPricesP = batchResultsP.flat();
