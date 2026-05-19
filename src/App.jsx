@@ -477,23 +477,22 @@ export default function App() {
   };
 
   const loadDishDetails = async (dish) => {
-    if (dish.steps && dish.steps.length > 0) return dish; // already have details
+    if (dish.steps && dish.steps.length > 0) return dish;
     try {
-      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
-      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
+      const people = profile?.people || 2;
+      const system = "You are a chef. Return ONLY valid JSON, no markdown, no extra text.";
+      const prompt = 'Full recipe for "' + dish.name + '" serving ' + people + ' people. Return ONLY this JSON structure with no omissions: {"nutrition":{"calories":"350 kcal","protein":"15g","carbs":"40g","fat":"10g"},"tips":["Tip one","Tip two"],"ingredients":[{"name":"ingredient","amount":"1","unit":"cup","notes":"optional note"}],"steps":[{"title":"Step title","detail":"Detailed instruction here."}]}. Include ALL ingredients needed and 5-8 clear steps.';
       const text = await callAI(system, prompt);
       if (!text) return dish;
-      const clean = text.replace(/```json|```/g, "").trim();
+      const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
       const match = clean.match(/\{[\s\S]*\}/);
       if (!match) return dish;
       const details = JSON.parse(match[0]);
       return { ...dish, ...details };
-    } catch(e) {
-      console.error("loadDishDetails:", e.message);
-      return dish;
-    }
+    } catch(e) { console.error("loadDishDetails:", e.message); return dish; }
   };
 
+  
   const openDish = async (dish) => {
     setSelectedDish(dish); // show immediately with basic info
     setScreen("dishDetail");
