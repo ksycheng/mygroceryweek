@@ -72,17 +72,25 @@ export default async function handler(req, res) {
           );
           if (!aiResp) return [];
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
-          // Handle both {perItemPrices:[...]} and [{...}] formats
           let items = [];
-          const objMatch = clean.match(/\{[\s\S]*\}/);
-          if (objMatch) {
-            try {
+          // Try to extract valid JSON - handle truncation by finding complete objects
+          try {
+            const objMatch = clean.match(/\{[\s\S]*\}/);
+            if (objMatch) {
               const parsed = JSON.parse(objMatch[0]);
               items = parsed.perItemPrices || [];
-            } catch(e) { console.error("Batch", bi, "obj parse err:", e.message); }
+            }
+          } catch(e) {
+            // JSON truncated - extract individual price objects with regex
+            const priceMatches = clean.matchAll(/"name"\s*:\s*"([^"]+)"[^}]*"store"\s*:\s*"([^"]+)"[^}]*"price"\s*:\s*([\d.]+)/g);
+            for (const m of priceMatches) {
+              if (m[2] !== "store" && parseFloat(m[3]) > 0) {
+                items.push({ name: m[1], store: m[2], price: parseFloat(m[3]) });
+              }
+            }
           }
           if (items.length === 0) {
-            const arrMatch = clean.match(/\[[\s\S]*\]/);
+            const arrMatch = clean.match(/\[[\s\S]*?\]/);
             if (arrMatch) {
               try { items = JSON.parse(arrMatch[0]); } catch(e) {}
             }
@@ -285,18 +293,23 @@ export default async function handler(req, res) {
           if (!aiResp) return [];
           const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
           let items = [];
-          const objMatch = clean.match(/\{[\s\S]*\}/);
-          if (objMatch) {
-            try {
+          try {
+            const objMatch = clean.match(/\{[\s\S]*\}/);
+            if (objMatch) {
               const parsed = JSON.parse(objMatch[0]);
               items = parsed.perItemPrices || [];
-            } catch(e) {}
+            }
+          } catch(e) {
+            const priceMatches = clean.matchAll(/"name"\s*:\s*"([^"]+)"[^}]*"store"\s*:\s*"([^"]+)"[^}]*"price"\s*:\s*([\d.]+)/g);
+            for (const m of priceMatches) {
+              if (m[2] !== "store" && parseFloat(m[3]) > 0) {
+                items.push({ name: m[1], store: m[2], price: parseFloat(m[3]) });
+              }
+            }
           }
           if (items.length === 0) {
-            const arrMatch = clean.match(/\[[\s\S]*\]/);
-            if (arrMatch) {
-              try { items = JSON.parse(arrMatch[0]); } catch(e) {}
-            }
+            const arrMatch = clean.match(/\[[\s\S]*?\]/);
+            if (arrMatch) { try { items = JSON.parse(arrMatch[0]); } catch(e) {} }
           }
           return items.filter(p => p.name && p.store && p.store !== "store" && p.price > 0);
         } catch(e) { console.error("PricesBatch", bi, "err:", e.message); return []; }
@@ -431,18 +444,17 @@ export default async function handler(req, res) {
 }
 
 function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "GROCERY PRICE SEARCH RESULTS (from walmart.ca, loblaws.ca, nofrills.ca, metro.ca, costco.ca, sobeys.com, flipp.com):\n" + priceContext +
-    "\n\nSTORE LOCATION RESULTS NEAR " + city + ", Ontario:\n" + storeSnippets +
-    "\n\nEXTRACT PRICES FOR: " + cleanedItems.join(", ") +
-    "\n\nCRITICAL RULES:" +
-    "\n1. Use ONLY prices explicitly written in the snippets (e.g. $2.99, 2 for $5)" +
-    "\n2. NEVER invent or guess prices — if not in snippets, omit the item" +
-    "\n3. store field MUST be the REAL store name from the snippet (e.g. Walmart, No Frills, Metro, Loblaws, Costco, Sobeys) — NEVER use 'store' or 'unknown'" +
-    "\n4. address: extract from store location results above for that store in " + city + " — NEVER invent addresses like '123 Main St'" +
-    "\n5. hours: extract from store location results — NEVER invent hours like '9am-6pm'" +
-    "\n6. source: the snippet title the price came from (max 60 chars)" +
-    "\n\nReturn ONLY valid JSON:\n" +
-    '{"perItemPrices":[{"name":"exact item name","store":"Walmart","price":2.99,"onSale":false,"source":"snippet title","address":"full address from location results or null","hours":"hours from location results or null"}]}';
+  return "SEARCH RESULTS:\n" + priceContext +
+    "\n\nFor each item below, find its price in the search results above." +
+    "\nItems: " + cleanedItems.join(", ") +
+    "\n\nRules:" +
+    "\n- Price must appear explicitly in a snippet (e.g. '$2.99', '2 for $5', '$1.49/100g')" +
+    "\n- Shopping results format: 'Item name - $X.XX at StoreName' — use the price and store name from these" +
+    "\n- If item has multiple prices, pick the lowest from a Canadian grocery store" +
+    "\n- store: real store name only (Walmart/No Frills/Metro/Loblaws/Costco/Sobeys/FreshCo)" +
+    "\n- If no price found for an item, omit it entirely — do NOT include it with a null price" +
+    "\n- Return compact JSON only, no extra fields:\n" +
+    '{"perItemPrices":[{"name":"item","store":"Walmart","price":2.99}]}';
 }
 
 function cleanItemName(item) {
