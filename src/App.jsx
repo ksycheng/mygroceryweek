@@ -477,20 +477,19 @@ export default function App() {
   };
 
   const loadDishDetails = async (dish) => {
-    if (dish.steps && dish.steps.length > 0) return dish;
+    if (dish.steps && dish.steps.length > 0) return dish; // already have details
     try {
-      const people = profile?.people || 2;
-      const system = "You are a chef. Return ONLY a valid JSON object. No markdown, no backticks, no extra text.";
-      const prompt = 'Full recipe for "' + dish.name + '" for ' + people + ' people. Return ONLY this JSON: {"nutrition":{"calories":"350 kcal","protein":"25g","carbs":"40g","fat":"12g"},"tips":["tip one","tip two"],"ingredients":[{"name":"chicken breast","amount":"500","unit":"g","notes":"boneless"},{"name":"soy sauce","amount":"3","unit":"tbsp","notes":""}],"steps":[{"title":"Prepare ingredients","detail":"Cut chicken into cubes and marinate in soy sauce for 10 minutes."},{"title":"Cook","detail":"Heat oil in a pan over medium-high heat and cook chicken until golden."}]} Fill in real values for ' + dish.name + '. Include all ingredients needed and 5-8 steps.';
+      const system = "You are a professional chef. Return ONLY a valid JSON object. No markdown, no code blocks.";
+      const prompt = "Give me full details for this dish: " + dish.name + " for " + (profile?.people||2) + " people. Return ONLY this JSON object: {nutrition:{calories,protein,carbs,fat},tips:[],ingredients:[{name,amount,unit,notes}],steps:[{title,detail}]}";
       const text = await callAI(system, prompt);
-      if (!text) { console.error("loadDishDetails: no response"); return dish; }
-      const clean = text.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
+      if (!text) return dish;
+      const clean = text.replace(/```json|```/g, "").trim();
       const match = clean.match(/\{[\s\S]*\}/);
-      if (!match) { console.error("loadDishDetails: no JSON in:", clean.slice(0,100)); return dish; }
+      if (!match) return dish;
       const details = JSON.parse(match[0]);
       return { ...dish, ...details };
     } catch(e) {
-      console.error("loadDishDetails error:", e.message);
+      console.error("loadDishDetails:", e.message);
       return dish;
     }
   };
@@ -603,7 +602,7 @@ export default function App() {
       const searchRes = await fetch("/api/prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "search", items: items.map(i => i.name), postal, budget }),
+        body: JSON.stringify({ mode: "search", items: items.map(i => i.name), postal, budget, cuisines: profile?.cuisines || [] }),
       });
       const searchData = await searchRes.json();
       if (searchData.error) throw new Error(searchData.error);
@@ -623,7 +622,7 @@ export default function App() {
         const combinedRes = await fetch("/api/prices", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "prices", items: items.map(i => i.name), postal, budget }),
+          body: JSON.stringify({ mode: "prices", items: items.map(i => i.name), postal, budget, cuisines: profile?.cuisines || [] }),
         });
         const combinedData = await combinedRes.json();
         if (combinedData.error) throw new Error(combinedData.error);
