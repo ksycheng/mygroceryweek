@@ -59,30 +59,29 @@ export default async function handler(req, res) {
       const { itemSnippets, storeSnippets, city, cleanedItems } = searchResults;
       const budgetAmt = budget || 200;
 
-      // Run all batches in PARALLEL — all fire simultaneously, done in ~2s total
+      // Run all batches in PARALLEL — fires simultaneously, done in ~2s total
       const BATCH = 4;
       const batches = [];
-      for (let i = 0; i < cleanedItems.length; i += BATCH) {
-        batches.push(cleanedItems.slice(i, i + BATCH));
-      }
+      for (let i = 0; i < cleanedItems.length; i += BATCH) batches.push(cleanedItems.slice(i, i + BATCH));
+      console.log("Parallel batches:", batches.length, "for", cleanedItems.length, "items");
       const batchResults = await Promise.all(batches.map(async (batchItems, bi) => {
         const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
-          const aiResponse = await callAI(
-            "Extract ONLY prices explicitly in snippets. Never guess. Return ONLY valid JSON.",
+          const aiResp = await callAI(
+            "Extract ONLY prices explicitly stated in snippets. Never invent prices. Return ONLY valid JSON.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
             groqKey, geminiKey, 1500
           );
-          if (!aiResponse) return [];
-          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          if (!aiResp) return [];
+          const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
           const m = clean.match(/\{[\s\S]*\}/);
           if (!m) return [];
           const parsed = JSON.parse(m[0]);
           return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
-        } catch(e) { console.error("Batch", bi, "error:", e.message); return []; }
+        } catch(e) { console.error("Batch", bi, "err:", e.message); return []; }
       }));
       const allPrices = batchResults.flat();
-      console.log("Prices found:", allPrices.length);
+      console.log("Total prices:", allPrices.length);
       // For each item pick the cheapest price found across all stores
       const itemNames = [...new Set(allPrices.map(p => p.name))];
       const cheapestPerItem = {};
@@ -262,27 +261,24 @@ export default async function handler(req, res) {
       // Run all batches in PARALLEL
       const BATCH_P = 4;
       const batchesP = [];
-      for (let i = 0; i < cleanedItems.length; i += BATCH_P) {
-        batchesP.push(cleanedItems.slice(i, i + BATCH_P));
-      }
+      for (let i = 0; i < cleanedItems.length; i += BATCH_P) batchesP.push(cleanedItems.slice(i, i + BATCH_P));
       const batchResultsP = await Promise.all(batchesP.map(async (batchItems, bi) => {
         const priceContext = batchItems.map(item => "=== " + item + " ===\n" + (itemSnippets[item] || "")).join("\n\n");
         try {
-          const aiResponse = await callAI(
-            "Extract ONLY prices explicitly in snippets. Never guess. Return ONLY valid JSON.",
+          const aiResp = await callAI(
+            "Extract ONLY prices explicitly stated in snippets. Never invent prices. Return ONLY valid JSON.",
             buildAnalyzePrompt(batchItems, priceContext, storeSnippets, city, postal, budgetAmt),
             groqKey, geminiKey, 1500
           );
-          if (!aiResponse) return [];
-          const clean = aiResponse.replace(/```json|```/g, "").replace(/\n/g, " ").trim();
+          if (!aiResp) return [];
+          const clean = aiResp.replace(/```json|```/g, "").replace(/[\r\n]+/g, " ").trim();
           const m = clean.match(/\{[\s\S]*\}/);
           if (!m) return [];
           const parsed = JSON.parse(m[0]);
           return (parsed.perItemPrices || []).filter(p => p.name && p.store && p.price > 0);
-        } catch(e) { console.error("Batch", bi, "error:", e.message); return []; }
+        } catch(e) { console.error("PricesBatch", bi, "err:", e.message); return []; }
       }));
       const allPricesP = batchResultsP.flat();
-      console.log("Prices found:", allPricesP.length);
       const itemNamesP = [...new Set(allPricesP.map(p => p.name))];
       const cheapestPerItemP = {};
       itemNamesP.forEach(name => {
@@ -412,14 +408,18 @@ export default async function handler(req, res) {
 }
 
 function buildAnalyzePrompt(cleanedItems, priceContext, storeSnippets, city, postal, budgetAmt) {
-  return "PRICE SEARCH RESULTS:\n" + priceContext +
-    "\n\nSTORE LOCATIONS NEAR " + city + ":\n" + storeSnippets +
-    "\n\nFind prices for: " + cleanedItems.join(", ") +
-    "\n\nRules: Only use prices explicitly in snippets. Never guess. Set price to null if not found." +
-    "\nFor address/hours use the store location results above." +
-    "\nonSale=true only if snippet says sale/flyer/this week." +
-    "\n\nReturn ONLY this JSON (keep source under 60 chars):\n" +
-    '{"perItemPrices":[{"name":"item","store":"store","price":0.00,"onSale":false,"source":"short source","address":"address or null","hours":"hours or null"}]}';
+  return "GROCERY PRICE SEARCH RESULTS (from walmart.ca, loblaws.ca, nofrills.ca, metro.ca, costco.ca, sobeys.com, flipp.com):\n" + priceContext +
+    "\n\nSTORE LOCATION RESULTS NEAR " + city + ", Ontario:\n" + storeSnippets +
+    "\n\nEXTRACT PRICES FOR: " + cleanedItems.join(", ") +
+    "\n\nCRITICAL RULES:" +
+    "\n1. Use ONLY prices explicitly written in the snippets (e.g. $2.99, 2 for $5)" +
+    "\n2. NEVER invent or guess prices — if not in snippets, omit the item" +
+    "\n3. store field MUST be the REAL store name from the snippet (e.g. Walmart, No Frills, Metro, Loblaws, Costco, Sobeys) — NEVER use 'store' or 'unknown'" +
+    "\n4. address: extract from store location results above for that store in " + city + " — NEVER invent addresses like '123 Main St'" +
+    "\n5. hours: extract from store location results — NEVER invent hours like '9am-6pm'" +
+    "\n6. source: the snippet title the price came from (max 60 chars)" +
+    "\n\nReturn ONLY valid JSON:\n" +
+    '{"perItemPrices":[{"name":"exact item name","store":"Walmart","price":2.99,"onSale":false,"source":"snippet title","address":"full address from location results or null","hours":"hours from location results or null"}]}';
 }
 
 function cleanItemName(item) {
@@ -544,23 +544,27 @@ async function callOpenRouter(system, prompt, maxTokens) {
 async function getStoreAddress(storeName, city, placesKey) {
   if (!placesKey) return null;
   try {
-    // Single call: get address + place_id, then details in parallel
-    const query = encodeURIComponent(storeName + " grocery store " + city + " Ontario");
-    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address&key=" + placesKey;
+    // Step 1: Find the place and get its place_id
+    const query = encodeURIComponent(storeName + " grocery " + city + " Ontario Canada");
+    const searchUrl = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=" + query + "&inputtype=textquery&fields=place_id,formatted_address,name&key=" + placesKey;
     const searchRes = await fetch(searchUrl);
     const searchData = await searchRes.json();
     const candidate = searchData?.candidates?.[0];
-    if (!candidate) return null;
-    // Get hours via place details
-    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + candidate.place_id + "&fields=opening_hours&key=" + placesKey;
+    if (!candidate) { console.log("Places: no candidate for", storeName); return null; }
+
+    // Step 2: Get place details including opening hours
+    const placeId = candidate.place_id;
+    const detailUrl = "https://maps.googleapis.com/maps/api/place/details/json?place_id=" + placeId + "&fields=formatted_address,opening_hours&key=" + placesKey;
     const detailRes = await fetch(detailUrl);
     const detailData = await detailRes.json();
-    const weekdayText = detailData?.result?.opening_hours?.weekday_text;
-    return {
-      address: candidate.formatted_address || null,
-      hours: weekdayText ? weekdayText.slice(0,2).join(", ") : null // just Mon-Tue to keep short
-    };
-  } catch(e) { return null; }
+    const details = detailData?.result;
+
+    const address = details?.formatted_address || candidate.formatted_address || null;
+    const weekdayText = details?.opening_hours?.weekday_text;
+    const hours = weekdayText ? weekdayText.join(" | ") : null;
+    console.log("Places found:", storeName, "->", address);
+    return { address, hours };
+  } catch(e) { console.error("Places error:", e.message); return null; }
 }
 
 async function callMistral(system, prompt, maxTokens) {
